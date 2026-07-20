@@ -13,12 +13,14 @@ import {
 import styles from "../elearning.module.css";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import type { Prisma } from "@prisma/client";
 
 type Props = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export const dynamic = "force-dynamic";
+type WrongAnswerRecord = Prisma.AttemptAnswerGetPayload<{ include: { option: true; question: { include: { options: true } }; attempt: { include: { quiz: { include: { program: true; classSection: { include: { course: true } } } } } } } }>;
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -74,30 +76,36 @@ export async function WrongQuestionsTab({ searchParams }: Props) {
   const searchTerm = searchValue(resolvedSearchParams?.q);
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
-  const wrongAnswers = await prisma.attemptAnswer.findMany({
-    where: {
-      isCorrect: false,
-      attempt: {
-        studentId: user.id,
-        status: { not: "IN_PROGRESS" },
+  let wrongAnswers: WrongAnswerRecord[] = [];
+
+  try {
+    wrongAnswers = await prisma.attemptAnswer.findMany({
+      where: {
+        isCorrect: false,
+        attempt: {
+          studentId: user.id,
+          status: { not: "IN_PROGRESS" },
+        },
       },
-    },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      option: true,
-      question: { include: { options: { orderBy: { order: "asc" } } } },
-      attempt: {
-        include: {
-          quiz: {
-            include: {
-              program: true,
-              classSection: { include: { course: true } },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        option: true,
+        question: { include: { options: { orderBy: { order: "asc" } } } },
+        attempt: {
+          include: {
+            quiz: {
+              include: {
+                program: true,
+                classSection: { include: { course: true } },
+              },
             },
           },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    console.error("Failed to load wrong questions:", error);
+  }
 
   type WrongAnswer = (typeof wrongAnswers)[number];
   const groups = new Map<string, { answers: WrongAnswer[] }>();
@@ -177,6 +185,23 @@ export async function WrongQuestionsTab({ searchParams }: Props) {
     if (normalizedSearch && !card.searchText.includes(normalizedSearch)) return false;
     return true;
   });
+  type WrongQuestionCard = (typeof filteredCards)[number];
+  type QuizGroup = {
+    quizId: string;
+    quizTitle: string;
+    courseTitle: string;
+    programCode: string;
+    classCode: string;
+    practiceHref: string;
+    cards: WrongQuestionCard[];
+  };
+  const groupedCards = Array.from(filteredCards.reduce<Map<string, QuizGroup>>((acc, card) => {
+    if (!acc.has(card.quizId)) {
+      acc.set(card.quizId, { quizId: card.quizId, quizTitle: card.quizTitle, courseTitle: card.courseTitle, programCode: card.programCode, classCode: card.classCode, practiceHref: card.practiceHref, cards: [] });
+    }
+    acc.get(card.quizId)?.cards.push(card);
+    return acc;
+  }, new Map()).values());
 
   return (
     <div className={styles.quizPageShell}>
@@ -251,7 +276,7 @@ export async function WrongQuestionsTab({ searchParams }: Props) {
           <Trophy size={42} />
           <h2>No wrong questions yet</h2>
           <p>Once you submit quizzes and miss questions, your focused review bank will appear here.</p>
-          <Link href="/elearning/exercises" className="btn-primary">Go to quizzes</Link>
+          <Link href="/elearning/practice?tab=quizzes" className="btn-primary">Go to quizzes</Link>
         </section>
       ) : filteredCards.length === 0 ? (
         <section className={styles.quizEmptyState}>
@@ -262,23 +287,7 @@ export async function WrongQuestionsTab({ searchParams }: Props) {
         </section>
       ) : (
         <div className={styles.wrongQuestionGroups}>
-          {Array.from(
-            filteredCards.reduce((acc, card) => {
-              if (!acc.has(card.quizId)) {
-                acc.set(card.quizId, {
-                  quizId: card.quizId,
-                  quizTitle: card.quizTitle,
-                  courseTitle: card.courseTitle,
-                  programCode: card.programCode,
-                  classCode: card.classCode,
-                  practiceHref: card.practiceHref,
-                  cards: [],
-                });
-              }
-              acc.get(card.quizId)!.cards.push(card);
-              return acc;
-            }, new Map<string, any>()).values()
-          ).map((group: any) => (
+          {groupedCards.map((group) => (
             <details key={group.quizId} className={styles.quizGroupDetails}>
               <summary className={styles.quizGroupSummary}>
                 <div className={styles.quizGroupSummaryHeader}>
@@ -298,7 +307,7 @@ export async function WrongQuestionsTab({ searchParams }: Props) {
               </summary>
               <div className={styles.quizGroupContent}>
                 <section className={styles.wrongQuestionGrid}>
-                  {group.cards.map((card: any) => (
+                  {group.cards.map((card) => (
                     <article key={card.key} className={styles.wrongQuestionCard}>
                       <div className={styles.wrongQuestionHeader}>
                         <div className={styles.quizTypeIcon}><AlertCircle size={22} /></div>

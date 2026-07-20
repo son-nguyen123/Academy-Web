@@ -1,107 +1,59 @@
 import Link from "next/link";
-import { CheckCircle, ChevronLeft, PlayCircle } from "lucide-react";
 import { notFound } from "next/navigation";
-import styles from "../../elearning.module.css";
+import { BookOpen, CheckCircle2, Edit3, Plus, School, Users } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
-import { TeacherCourseEditView } from "./TeacherCourseEditView";
+import { updateCourseTemplateAction } from "@/lib/teacherActions";
+import { ElearningBreadcrumbs } from "../../ElearningBreadcrumbs";
+import styles from "../../elearning.module.css";
 
-type Props = { params: Promise<{ courseId: string }> };
-
+type Props = { params: Promise<{ courseId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
 export const dynamic = "force-dynamic";
 
-function extractMetadataValue(content: string | null, label: string) {
-  if (!content) return "";
-  const line = content.split(/\r?\n/).find((item) => item.toLowerCase().startsWith(`${label.toLowerCase()}:`));
-  return line?.slice(label.length + 1).trim() || "";
-}
-
-function lessonPreview(content: string | null) {
-  if (!content) return "Open this lesson to view the full learning content.";
-
-  const summaryMatch = content.match(/Summary\s*\n([\s\S]*?)(?:\n\n|$)/i);
-  const rawPreview = summaryMatch?.[1] || content.replace(/Source Metadata\s*\n[\s\S]*$/i, "");
-  const preview = rawPreview.replace(/Lesson Content\s*\n/i, "").replace(/\s+/g, " ").trim();
-
-  if (!preview) return "Open this lesson to view the full learning content.";
-  return preview.length > 180 ? `${preview.slice(0, 177)}...` : preview;
-}
-
-export default async function CourseDetailPage({ params }: Props) {
+export default async function CourseDetailPage({ params, searchParams }: Props) {
   const user = await requireUser();
-  
-  if (user.role === "TEACHER" || user.role === "ADMIN") {
-    return <TeacherCourseEditView params={params} />;
-  }
-
   const { courseId } = await params;
+  const query = await searchParams;
   const course = await prisma.course.findUnique({
     where: { id: courseId },
     include: {
-      lessons: { orderBy: { order: "asc" } },
-      classes: { include: { teacher: true, enrollments: true, quizzes: true, assignments: true } },
+      lessons: { orderBy: { order: "asc" }, include: { deliveries: { include: { classSection: { include: { enrollments: true } } } } } },
+      classes: { orderBy: { createdAt: "desc" }, include: { teacher: true, enrollments: { where: { status: "ACTIVE" }, select: { id: true, userId: true } } } },
     },
   });
-
   if (!course) notFound();
 
-  const hasAccess = user.role === "ADMIN"
-    || course.classes.some((classSection) => classSection.teacherId === user.id)
-    || course.classes.some((classSection) => classSection.enrollments.some((enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE"));
+  const isManager = user.role === "TEACHER" || user.role === "ADMIN";
+  if (!isManager && !course.classes.some((item) => item.enrollments.some((enrollment) => enrollment.userId === user.id))) notFound();
+  const updateCourse = updateCourseTemplateAction.bind(null, course.id);
+  const visibleLessons = isManager ? course.lessons : course.lessons.filter((lesson) => lesson.deliveries.some((delivery) => delivery.status === "PUBLISHED" && (!delivery.availableAt || delivery.availableAt <= new Date()) && delivery.classSection.enrollments.some((enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE")));
 
-  if (!hasAccess) notFound();
+  return <main className={styles.courseLibraryPage}>
+    <ElearningBreadcrumbs items={[{ label: isManager ? "Course Library" : "My Courses", href: "/elearning/courses" }, { label: course.title }]} />
+    {query.created === "1" ? <div className={styles.workflowNextStep}><CheckCircle2 size={20} /><div><strong>Course template created</strong><p>You can now connect it to a classroom or begin building its lesson sequence.</p></div></div> : null}
+    <header className={styles.workflowHero}><div><span><BookOpen size={16} /> {course.program || "Course template"}</span><h1>{course.title}</h1><p>{course.description || "No course description has been added yet."}</p></div>{isManager ? <Link href={`/elearning/classrooms/new?courseId=${course.id}`} className="btn-primary"><Plus size={16} /> Create classroom from this course</Link> : null}</header>
 
-  const completedLessons = Math.min(1, course.lessons.length);
-  const progress = course.lessons.length === 0 ? 0 : Math.round((completedLessons / course.lessons.length) * 100);
+    {isManager ? <div className={styles.courseTemplateLayout}>
+      <section className={styles.workflowCard}>
+        <div className={styles.workflowCardHeading}><span><Edit3 size={18} /></span><div><p>Template settings</p><h2>Reusable course information</h2><small>These changes affect every classroom using this Course.</small></div></div>
+        <form action={updateCourse} className={styles.workflowFieldGrid}>
+          <label className={`${styles.workflowField} ${styles.workflowFieldWide}`}><span>Course title</span><input name="title" defaultValue={course.title} required /></label>
+          <label className={styles.workflowField}><span>Program / level</span><input name="program" defaultValue={course.program || ""} /></label>
+          <label className={styles.workflowField}><span>Curriculum reference</span><input name="curriculum" defaultValue={course.curriculum || ""} /></label>
+          <label className={`${styles.workflowField} ${styles.workflowFieldWide}`}><span>Description</span><textarea name="description" rows={4} defaultValue={course.description || ""} /></label>
+          <label className={styles.workflowCheck}><input type="checkbox" name="published" defaultChecked={course.published} /><span><strong>Published in Course Library</strong><small>Available when teachers create classrooms.</small></span></label>
+          <button className="btn-primary" type="submit">Save course template</button>
+        </form>
+      </section>
+      <section className={styles.workflowCard}>
+        <div className={styles.workflowCardHeading}><span><School size={18} /></span><div><p>Delivery instances</p><h2>Classrooms using this course</h2><small>Roster, schedule and assignments are managed inside each classroom.</small></div></div>
+        {course.classes.length ? <div className={styles.courseClassroomList}>{course.classes.map((item) => <Link href={`/elearning/classrooms/${item.id}`} key={item.id}><div><strong>{item.name}</strong><p>{item.code} · {item.teacher?.name || item.teacher?.email || "No teacher"}</p></div><span><Users size={14} /> {item.enrollments.length}</span></Link>)}</div> : <div className={styles.workflowEmpty}><p>This template is not connected to a classroom yet.</p><Link href={`/elearning/classrooms/new?courseId=${course.id}`} className="btn-primary">Create classroom</Link></div>}
+      </section>
+    </div> : null}
 
-  return (
-    <div>
-      <Link href="/elearning/courses" style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text-muted)", textDecoration: "none", marginBottom: "1.5rem" }}>
-        <ChevronLeft size={16} /> Back to Courses
-      </Link>
-      <div className={styles.panel} style={{ backgroundColor: "var(--color-navy)", color: "white" }}>
-        <h1 style={{ margin: "0 0 1rem 0", color: "white" }}>{course.title}</h1>
-        {course.description && <p style={{ margin: "0 0 1rem 0", color: "rgba(255,255,255,0.82)" }}>{course.description}</p>}
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <div className={styles.progressBar} style={{ width: "200px", backgroundColor: "rgba(255,255,255,0.2)" }}><div className={styles.progressFill} style={{ width: `${progress}%` }} /></div>
-          <span>{progress}% Completed</span>
-        </div>
-      </div>
-
-      <div style={{ marginTop: "2rem" }}>
-        <h2 style={{ marginBottom: "1rem", color: "var(--color-navy)" }}>Course Syllabus</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          {course.lessons.map((lesson, index) => {
-            const skill = extractMetadataValue(lesson.content, "Skill");
-            const level = extractMetadataValue(lesson.content, "Level");
-            const contentType = extractMetadataValue(lesson.content, "Content Type");
-
-            return (
-            <Link key={lesson.id} href={`/elearning/learn/${lesson.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-              <div className={styles.panel} style={{ marginBottom: 0, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "1rem", minWidth: 0 }}>
-                  <PlayCircle size={18} color="var(--color-navy)" />
-                  <div style={{ minWidth: 0 }}>
-                    <strong>Lesson {lesson.order}: {lesson.title}</strong>
-                    <p style={{ color: "var(--text-muted)", margin: "0.35rem 0 0", lineHeight: 1.5 }}>{lessonPreview(lesson.content)}</p>
-                    {(skill || level || contentType) && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.65rem" }}>
-                        {[skill, level, contentType].filter(Boolean).map((badge) => (
-                          <span key={badge} style={{ padding: "0.25rem 0.55rem", borderRadius: "999px", background: "#eef2ff", color: "#4f46e5", fontSize: "0.72rem", fontWeight: 800, textTransform: "capitalize" }}>
-                            {badge}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                {index < completedLessons && <CheckCircle size={18} color="#166534" />}
-              </div>
-            </Link>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
+    <section className={styles.workflowCard}>
+      <div className={styles.workflowCardHeading}><span><BookOpen size={18} /></span><div><p>Curriculum</p><h2>Lesson sequence</h2><small>{isManager ? "Lessons belong to the reusable Course template." : "Continue through the lessons in order."}</small></div></div>
+      {visibleLessons.length ? <div className={styles.courseLessonList}>{visibleLessons.map((lesson, index) => { const delivery = lesson.deliveries.find((item) => isManager || item.classSection.enrollments.some((enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE")); return <Link href={`/elearning/learn/${lesson.id}${delivery ? `?delivery=${delivery.id}` : ""}`} key={lesson.id}><span>{index + 1}</span><div><strong>{lesson.title}</strong><p>{lesson.published ? "Published" : "Draft"}</p></div></Link>; })}</div> : <p className={styles.classroomEmpty}>{isManager ? "No lessons have been added to this Course template." : "No lessons have been assigned to your class yet."}</p>}
+    </section>
+  </main>;
 }

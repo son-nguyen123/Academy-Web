@@ -10,6 +10,8 @@ import {
   Newspaper,
   Settings,
   Bell,
+  GraduationCap,
+  Globe2,
   Users,
 } from "lucide-react"
 
@@ -77,7 +79,18 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="bg-navy p-4 text-white">
-        {/* We can put user profile or theme toggle here, but standard layout has it in header */}
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild className="hover:bg-navy-dark text-slate-300 hover:text-white">
+              <Link href="/elearning"><GraduationCap className="mr-2" /><span>E-learning</span></Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild className="hover:bg-navy-dark text-slate-300 hover:text-white">
+              <Link href="/"><Globe2 className="mr-2" /><span>Public website</span></Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   )

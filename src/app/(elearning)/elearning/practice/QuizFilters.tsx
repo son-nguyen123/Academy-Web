@@ -1,8 +1,7 @@
 "use client";
 
 import { Search, SlidersHorizontal } from "lucide-react";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useTransition, useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "../elearning.module.css";
 
 type QuizFiltersProps = {
@@ -26,36 +25,16 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 
 export default function QuizFilters({ q, program, unit, programOptions, unitOptions }: QuizFiltersProps) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [isPending, startTransition] = useTransition();
-
+  const formRef = useRef<HTMLFormElement>(null);
+  const unitRef = useRef<HTMLSelectElement>(null);
   const [searchTerm, setSearchTerm] = useState(q);
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-  const handleSearch = (term: string, newProgram: string, newUnit: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    
-    if (term) params.set("q", term);
-    else params.delete("q");
-    
-    if (newProgram) params.set("program", newProgram);
-    else params.delete("program");
-
-    if (newUnit) params.set("unit", newUnit);
-    else params.delete("unit");
-
-    startTransition(() => {
-      router.replace(`${pathname}?${params.toString()}`);
-    });
-  };
-
   useEffect(() => {
     if (debouncedSearchTerm !== q) {
-      handleSearch(debouncedSearchTerm, program, unit);
+      formRef.current?.requestSubmit();
     }
-  }, [debouncedSearchTerm]);
+  }, [debouncedSearchTerm, q]);
 
   return (
     <div className={styles.quizFilterPanel}>
@@ -66,7 +45,8 @@ export default function QuizFilters({ q, program, unit, programOptions, unitOpti
         </div>
       </div>
 
-      <div className={styles.quizFilterGrid} style={{ opacity: isPending ? 0.5 : 1, transition: "opacity 0.2s" }}>
+      <form ref={formRef} method="get" className={styles.quizFilterGrid}>
+        <input type="hidden" name="tab" value="tests" />
         <label className={styles.quizSearchControl}>
           <span>Search</span>
           <div>
@@ -84,8 +64,11 @@ export default function QuizFilters({ q, program, unit, programOptions, unitOpti
           <span>Program</span>
           <select 
             name="program" 
-            value={program} 
-            onChange={(e) => handleSearch(searchTerm, e.target.value, unit)}
+            defaultValue={program}
+            onChange={() => {
+              if (unitRef.current) unitRef.current.value = "";
+              formRef.current?.requestSubmit();
+            }}
           >
             <option value="">All programs</option>
             {programOptions.map((p) => (
@@ -97,9 +80,10 @@ export default function QuizFilters({ q, program, unit, programOptions, unitOpti
         <label>
           <span>Unit</span>
           <select 
+            ref={unitRef}
             name="unit" 
-            value={unit} 
-            onChange={(e) => handleSearch(searchTerm, program, e.target.value)}
+            defaultValue={unit}
+            onChange={() => formRef.current?.requestSubmit()}
           >
             <option value="">All units</option>
             {unitOptions.map((u) => (
@@ -107,7 +91,7 @@ export default function QuizFilters({ q, program, unit, programOptions, unitOpti
             ))}
           </select>
         </label>
-      </div>
+      </form>
     </div>
   );
 }

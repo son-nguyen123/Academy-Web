@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import type { CSSProperties } from "react";
 import {
   AlertTriangle,
@@ -15,7 +16,7 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
-import { submitAssignmentAction } from "@/lib/lmsActions";
+import { submitAssignmentWithStateAction, type SubmitAssignmentState } from "@/lib/lmsActions";
 import styles from "./studentAssignments.module.css";
 
 type AssignmentItem = {
@@ -24,12 +25,19 @@ type AssignmentItem = {
   description: string | null;
   type: string;
   difficulty: "EASY" | "MEDIUM" | "HARD";
+  skill: string;
+  cefrLevel: string | null;
+  maxScore: number;
+  rubric: string | null;
+  allowLateSubmission: boolean;
+  allowResubmission: boolean;
   category: string | null;
   tags: string[];
   instructions: string | null;
   attachmentUrl: string | null;
   attachmentName: string | null;
   dueAt: string | null;
+  classroomId: string;
   classCode: string;
   courseTitle: string;
   submission: {
@@ -46,7 +54,7 @@ type StudentAssignmentsBoardProps = {
 };
 
 type WorkState = Record<string, { started: boolean; content: string; fileName: string }>;
-type AssignmentStatus = "NOT_STARTED" | "IN_PROGRESS" | "SUBMITTED" | "OVERDUE";
+type AssignmentStatus = "NOT_STARTED" | "IN_PROGRESS" | "SUBMITTED" | "NEEDS_REVISION" | "OVERDUE";
 
 const difficultyMeta = {
   EASY: { label: "Easy", color: "#10B981" },
@@ -58,6 +66,7 @@ const statusMeta = {
   NOT_STARTED: { label: "Not Started", color: "#06B6D4" },
   IN_PROGRESS: { label: "In Progress", color: "#F59E0B" },
   SUBMITTED: { label: "Submitted", color: "#10B981" },
+  NEEDS_REVISION: { label: "Needs Revision", color: "#8B5CF6" },
   OVERDUE: { label: "Overdue", color: "#EF4444" },
 };
 
@@ -69,19 +78,11 @@ function subjectColor(value: string) {
 }
 
 function statusFor(assignment: AssignmentItem, state: WorkState[string], now: number): AssignmentStatus {
+  if (assignment.submission?.status === "REVISION_REQUESTED") return "NEEDS_REVISION";
   if (assignment.submission) return "SUBMITTED";
   if (assignment.dueAt && new Date(assignment.dueAt).getTime() < now) return "OVERDUE";
   if (state?.started || state?.content || state?.fileName) return "IN_PROGRESS";
   return "NOT_STARTED";
-}
-
-function progressFor(status: AssignmentStatus, state: WorkState[string]) {
-  if (status === "SUBMITTED") return 100;
-  if (status === "OVERDUE") return 0;
-  let progress = state?.started ? 20 : 0;
-  if ((state?.content || "").trim().length > 20) progress += 45;
-  if (state?.fileName) progress += 25;
-  return Math.min(progress, 90);
 }
 
 function timeParts(dueAt: string | null, now: number) {
@@ -145,7 +146,8 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
   const [activeId, setActiveId] = useState<string | null>(null);
   const [workState, setWorkState] = useState<WorkState>({});
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [successMessage, setSuccessMessage] = useState("");
+  const initialSubmitState: SubmitAssignmentState = { ok: false, message: "", assignmentId: "" };
+  const [submitState, submitFormAction, submitPending] = useActionState(submitAssignmentWithStateAction, initialSubmitState);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -156,12 +158,6 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
       window.clearInterval(timer);
     };
   }, []);
-
-  useEffect(() => {
-    if (!successMessage) return;
-    const timer = window.setTimeout(() => setSuccessMessage(""), 3200);
-    return () => window.clearTimeout(timer);
-  }, [successMessage]);
 
   const stats = useMemo(() => {
     const completed = assignments.filter((assignment) => assignment.submission).length;
@@ -197,6 +193,13 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
   const activeAssignment = assignments.find((assignment) => assignment.id === activeId) || null;
   const activeState = activeAssignment ? workState[activeAssignment.id] || { started: false, content: activeAssignment.submission?.content || "", fileName: activeAssignment.submission?.fileUrl || "" } : null;
   const activeStatus = activeAssignment && activeState ? statusFor(activeAssignment, activeState, now) : "NOT_STARTED";
+  const activeDeadlinePassed = Boolean(activeAssignment?.dueAt && new Date(activeAssignment.dueAt).getTime() < now);
+  const activeSubmissionLocked = Boolean(
+    activeAssignment?.submission
+    && !activeAssignment.allowResubmission
+    && activeAssignment.submission.status !== "REVISION_REQUESTED",
+  );
+  const activeCanSubmit = Boolean(activeAssignment && (!activeDeadlinePassed || activeAssignment.allowLateSubmission) && !activeSubmissionLocked);
 
   const updateWork = (id: string, patch: Partial<WorkState[string]>) => {
     setWorkState((current) => ({
@@ -263,13 +266,6 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
         </aside>
       </div>
 
-      {nextAssignment && (
-        <div className={styles.notificationCard}>
-          <span className={styles.reminderPill}>Gentle reminder</span>
-          <span>{nextAssignment.title} is your closest deadline. Open the card when you are ready to work on it.</span>
-        </div>
-      )}
-
       {assignments.length === 0 ? (
         <StudentEmptyState />
       ) : (
@@ -277,7 +273,6 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
           {sortedAssignments.map((assignment) => {
             const state = workState[assignment.id] || { started: false, content: assignment.submission?.content || "", fileName: assignment.submission?.fileUrl || "" };
             const status = statusFor(assignment, state, now);
-            const progress = progressFor(status, state);
             const due = timeParts(assignment.dueAt, now);
             const accent = status === "OVERDUE" ? "#EF4444" : subjectColor(assignment.category || assignment.courseTitle || assignment.type);
             const countdown = countdownColor(due.totalHours, due.overdue);
@@ -301,24 +296,17 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
                     <span className={styles.difficultyBadge} style={{ "--difficulty-color": difficultyMeta[assignment.difficulty].color } as CSSProperties}>
                       {difficultyMeta[assignment.difficulty].label}
                     </span>
-                    <span className={styles.tag}>{assignment.category || assignment.type.replace("_", " ")}</span>
+                    <span className={styles.tag}>{assignment.skill.replace("_", " ")}</span>
+                    {assignment.cefrLevel ? <span className={styles.tag}>{assignment.cefrLevel}</span> : null}
                   </div>
                 </div>
 
                 <div className={styles.metadataStrip}>
                   <span className={styles.dueLine}><Clock3 size={15} /> {formatDate(assignment.dueAt)}</span>
-                  <span>{assignment.classCode}</span>
+                  <span>{assignment.classCode} · {assignment.maxScore} points</span>
                 </div>
 
-                <p className={styles.description}>{previewText(assignment.description)}</p>
-                <button className={styles.viewLink} type="button" onClick={(event) => { event.stopPropagation(); openAssignment(assignment); }}>
-                  View Full Brief
-                </button>
-
-                <div className={styles.progressRow}>
-                  <div className={styles.progressRing} style={{ "--progress": `${progress}%`, "--progress-color": statusMeta[status].color } as CSSProperties}>
-                    <div className={styles.progressRingInner}>{progress}%</div>
-                  </div>
+                <div className={styles.cardFooter}>
                   <div className={styles.statusArea}>
                     <span
                       className={`${styles.statusBadge} ${status === "NOT_STARTED" ? styles.statusPulse : ""}`}
@@ -328,16 +316,12 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
                       {status === "OVERDUE" && <AlertTriangle size={14} />}
                       {statusMeta[status].label}
                     </span>
-                    {status === "IN_PROGRESS" && (
-                      <div className={styles.linearProgress}>
-                        <div className={styles.linearProgressFill} style={{ "--progress": `${progress}%`, "--progress-color": statusMeta[status].color } as CSSProperties} />
-                      </div>
-                    )}
                     {status === "SUBMITTED" && assignment.submission && (
                       <small>Submitted {formatDate(assignment.submission.submittedAt)}</small>
                     )}
                     {status === "OVERDUE" && <small>Past due: {overdueDays} day{overdueDays > 1 ? "s" : ""}</small>}
                   </div>
+                  <button className={styles.viewLink} type="button" onClick={(event) => { event.stopPropagation(); openAssignment(assignment); }}>Open assignment</button>
                 </div>
               </article>
             );
@@ -352,6 +336,8 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
               <div>
                 <div className={styles.previewBadgeRow}>
                   <span className={styles.statusBadge} style={{ "--status-color": statusMeta[activeStatus].color } as CSSProperties}>{statusMeta[activeStatus].label}</span>
+                  <span className={styles.tag}>{activeAssignment.skill.replace("_", " ")}</span>
+                  {activeAssignment.cefrLevel ? <span className={styles.tag}>CEFR {activeAssignment.cefrLevel}</span> : null}
                 </div>
                 <h2>{activeAssignment.title}</h2>
                 <p style={{ margin: "0.35rem 0 0", opacity: 0.86 }}>{activeAssignment.classCode} · {activeAssignment.courseTitle}</p>
@@ -376,12 +362,7 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
 
                 <aside className={styles.modalSection}>
                   <h3>Rubric / Criteria</h3>
-                  <ul className={styles.rubricList}>
-                    <li>Complete the task according to the brief.</li>
-                    <li>Match the expected format for {activeAssignment.type.replace("_", " ").toLowerCase()}.</li>
-                    <li>Difficulty: {difficultyMeta[activeAssignment.difficulty].label}.</li>
-                    <li>Submit before {formatDate(activeAssignment.dueAt)} for on-time credit.</li>
-                  </ul>
+                  {activeAssignment.rubric ? <p className={styles.briefText} style={{ whiteSpace: "pre-wrap" }}>{activeAssignment.rubric}</p> : <ul className={styles.rubricList}><li>Complete the task according to the brief.</li><li>Match the expected format for {activeAssignment.type.replace("_", " ").toLowerCase()}.</li><li>Difficulty: {difficultyMeta[activeAssignment.difficulty].label}.</li><li>Maximum score: {activeAssignment.maxScore}.</li></ul>}
                 </aside>
               </div>
 
@@ -398,11 +379,8 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
               </section>
 
               <form
-                action={submitAssignmentAction}
+                action={submitFormAction}
                 className={styles.modalSection}
-                onSubmit={() => {
-                  setSuccessMessage(activeAssignment.submission ? "Resubmission saved. Nice and tidy." : "Submitted successfully. That felt good.");
-                }}
               >
                 <input type="hidden" name="assignmentId" value={activeAssignment.id} />
                 <input type="hidden" name="fileUrl" value={activeState.fileName} />
@@ -443,7 +421,21 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
                       <span>Last submitted {formatDate(activeAssignment.submission.submittedAt)} · {activeAssignment.submission.fileUrl || "No file reference"}</span>
                     </div>
                   )}
+                  {activeDeadlinePassed && activeAssignment.allowLateSubmission ? (
+                    <p className={styles.submissionNotice}><AlertTriangle size={17} /> The deadline has passed, but your teacher allows late submission.</p>
+                  ) : null}
+                  {activeDeadlinePassed && !activeAssignment.allowLateSubmission ? (
+                    <p className={styles.submissionError}><AlertTriangle size={17} /> The deadline has passed. Contact your teacher if you need an extension.</p>
+                  ) : null}
+                  {submitState.assignmentId === activeAssignment.id && submitState.message && !submitState.ok ? (
+                    <p className={styles.submissionError}><AlertTriangle size={17} /> {submitState.message}</p>
+                  ) : null}
                   <div className={styles.modalActions}>
+                    {activeAssignment.submission ? (
+                      <Link className={styles.secondaryButton} href={`/elearning/classrooms/${activeAssignment.classroomId}?tab=assignments`}>
+                        Back to classroom
+                      </Link>
+                    ) : null}
                     <button className={styles.historyButton} type="button" onClick={() => setHistoryOpen((value) => !value)}>
                       View Submission History
                     </button>
@@ -451,9 +443,11 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
                       <button className={styles.secondaryButton} type="button" onClick={() => updateWork(activeAssignment.id, { started: true })}>
                         <Sparkles size={16} /> Start Assignment
                       </button>
+                    ) : activeSubmissionLocked ? (
+                      <span className={styles.secondaryButton}>Resubmission disabled</span>
                     ) : (
-                      <button className={styles.ctaButton} type="submit">
-                        <Send size={16} /> {activeAssignment.submission ? "Resubmit" : "Submit Assignment"}
+                      <button className={styles.ctaButton} type="submit" disabled={!activeCanSubmit || submitPending}>
+                        <Send size={16} /> {submitPending ? "Submitting..." : activeAssignment.submission?.status === "REVISION_REQUESTED" ? "Submit revision" : activeAssignment.submission ? "Resubmit" : "Submit Assignment"}
                       </button>
                     )}
                   </div>
@@ -464,9 +458,9 @@ export default function StudentAssignmentsBoard({ assignments }: StudentAssignme
         </div>
       )}
 
-      {successMessage && (
+      {submitState.ok && submitState.message && (
         <div className={styles.successBurst} role="status">
-          <CheckCircle2 size={18} /> {successMessage}
+          <CheckCircle2 size={18} /> {submitState.message}
         </div>
       )}
     </div>

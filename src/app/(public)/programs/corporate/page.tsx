@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import { ProgramPageActions } from '../ProgramPageActions';
 
 export const metadata: Metadata = {
   title: 'Corporate English | Academy',
@@ -10,6 +11,7 @@ export default function CorporatePage() {
     <div className="min-h-screen p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-4">Corporate English</h1>
       <p>Welcome to the Corporate English page. Content coming soon!</p>
+      <ProgramPageActions program="corporate" />
     </div>
   );
 }

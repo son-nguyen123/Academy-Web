@@ -2,15 +2,11 @@ import Link from "next/link";
 import styles from "./elearning.module.css";
 import {
   Activity,
-  AlertCircle,
   ArrowRight,
   Award,
-  BookPlus,
   BookOpen,
   CheckCircle2,
-  CheckSquare,
   ClipboardList,
-  FileText,
   FileCheck2,
   GraduationCap,
   ListTodo,
@@ -18,11 +14,10 @@ import {
   Sparkles,
   Target,
   Trophy,
-  UserPlus,
-  Users,
 } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { TeacherWorkspace } from "./teacher-workspace/TeacherWorkspace";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +57,10 @@ function scoreTone(score: number | null) {
 export default async function ElearningDashboard() {
   const user = await requireUser();
   const isStudent = user.role === "STUDENT";
-  const classWhere = user.role === "TEACHER" ? { teacherId: user.id } : {};
+
+  if (!isStudent) {
+    return <TeacherWorkspace user={{ id: user.id, name: user.name, role: user.role }} />;
+  }
 
   if (isStudent) {
     const [
@@ -75,14 +73,14 @@ export default async function ElearningDashboard() {
       recentSubmissions,
     ] = await Promise.all([
       prisma.enrollment.findMany({
-        where: { userId: user.id, status: "ACTIVE" },
+        where: { userId: user.id, status: "ACTIVE", classSection: { status: "ACTIVE" } },
         include: {
           classSection: {
             include: {
               course: {
                 include: {
                   lessons: {
-                    where: { published: true },
+                    where: { published: true, deliveries: { some: { status: "PUBLISHED", classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } } } },
                     orderBy: { order: "asc" },
                     take: 3,
                   },
@@ -96,7 +94,7 @@ export default async function ElearningDashboard() {
       prisma.assignment.findMany({
         where: {
           status: "PUBLISHED",
-          classSection: { enrollments: { some: { userId: user.id, status: "ACTIVE" } } },
+          classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } },
         },
         orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
         include: {
@@ -113,7 +111,8 @@ export default async function ElearningDashboard() {
           published: true,
           OR: [
             { isOpenQuiz: true },
-            { classSection: { enrollments: { some: { userId: user.id, status: "ACTIVE" } } } },
+            { classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } },
+            { deliveries: { some: { status: "PUBLISHED", classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } } } },
           ],
         },
         orderBy: { createdAt: "desc" },
@@ -131,7 +130,7 @@ export default async function ElearningDashboard() {
         where: {
           isPracticeTest: true,
           published: true,
-          classSection: { enrollments: { some: { userId: user.id, status: "ACTIVE" } } },
+          deliveries: { some: { status: "PUBLISHED", classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } } },
         },
         orderBy: { createdAt: "desc" },
         include: {
@@ -157,7 +156,7 @@ export default async function ElearningDashboard() {
         },
       }),
       prisma.grade.findMany({
-        where: { studentId: user.id },
+        where: { studentId: user.id, status: "PUBLISHED" },
         orderBy: { createdAt: "desc" },
         take: 8,
         include: {
@@ -184,6 +183,9 @@ export default async function ElearningDashboard() {
     const submittedAssignments = assignments.length - pendingAssignments.length;
     const completedQuizzes = quizzes.filter((quiz) => quiz.attempts.some((attempt) => attempt.status !== "IN_PROGRESS")).length;
     const completedPracticeTests = practiceTests.filter((test) => test.attempts.some((attempt) => attempt.status !== "IN_PROGRESS")).length;
+    const pendingQuizCount = quizzes.filter((quiz) => quiz.attempts.length === 0).length;
+    const pendingPracticeTestCount = practiceTests.filter((test) => test.attempts.length === 0).length;
+    const pendingLearningCount = pendingAssignments.length + pendingQuizCount + pendingPracticeTestCount;
     const availableQuizCount = quizzes.length + practiceTests.length;
     const finishedLearningItems = submittedAssignments + completedQuizzes + completedPracticeTests;
     const totalLearningItems = assignments.length + availableQuizCount;
@@ -197,11 +199,11 @@ export default async function ElearningDashboard() {
     const continueLearning = firstInProgressAttempt
       ? {
           href: firstInProgressAttempt.quiz.isPracticeTest
-            ? `/elearning/tests/${firstInProgressAttempt.quiz.id}?attempt=${firstInProgressAttempt.id}`
+            ? `/elearning/exercises/${firstInProgressAttempt.quiz.id}?attempt=${firstInProgressAttempt.id}`
             : `/elearning/exercises/${firstInProgressAttempt.quiz.id}`,
           eyebrow: "Continue attempt",
           title: firstInProgressAttempt.quiz.title,
-          meta: `${firstInProgressAttempt.quiz.classSection.code} | Started ${formatDateTime(firstInProgressAttempt.startedAt)}`,
+          meta: `${firstInProgressAttempt.quiz.classSection?.code || "Open practice"} | Started ${formatDateTime(firstInProgressAttempt.startedAt)}`,
           action: "Resume now",
           icon: <PlayCircle size={22} />,
         }
@@ -225,7 +227,7 @@ export default async function ElearningDashboard() {
             }
           : nextPracticeTest
             ? {
-                href: `/elearning/tests/${nextPracticeTest.id}`,
+                href: `/elearning/exercises/${nextPracticeTest.id}`,
                 eyebrow: "Next practice test",
                 title: nextPracticeTest.title,
                 meta: `${nextPracticeTest.examType} | ${nextPracticeTest.skill} | ${nextPracticeTest.questions.length} questions`,
@@ -264,14 +266,14 @@ export default async function ElearningDashboard() {
         key: `quiz-${quiz.id}`,
         href: `/elearning/exercises/${quiz.id}`,
         title: quiz.title,
-        meta: `${quiz.program?.code || "General"} | ${quiz.classSection.code}`,
+        meta: `${quiz.program?.code || "General"} | ${quiz.classSection?.code || "Open quiz"}`,
         due: quiz.timeLimit ? `${quiz.timeLimit} min` : "No time limit",
         badge: "Quiz",
         icon: <ClipboardList size={18} />,
       })),
       ...practiceTests.filter((test) => test.attempts.length === 0).slice(0, 3).map((test) => ({
         key: `test-${test.id}`,
-        href: `/elearning/tests/${test.id}`,
+        href: `/elearning/exercises/${test.id}`,
         title: test.title,
         meta: `${test.examType} | ${test.skill}`,
         due: test.timeLimit ? `${test.timeLimit} min` : "Practice test",
@@ -286,7 +288,7 @@ export default async function ElearningDashboard() {
         date: attempt.submittedAt || attempt.startedAt,
         title: attempt.status === "IN_PROGRESS" ? "Started quiz" : "Completed quiz",
         detail: `${attempt.quiz.title} | ${scoreLabel(attempt.score)}`,
-        href: attempt.quiz.isPracticeTest ? `/elearning/tests/${attempt.quizId}` : `/elearning/exercises/${attempt.quizId}?attempt=${attempt.id}`,
+        href: `/elearning/exercises/${attempt.quizId}?attempt=${attempt.id}`,
         icon: <ClipboardList size={16} />,
       })),
       ...recentSubmissions.map((submission) => ({
@@ -358,7 +360,7 @@ export default async function ElearningDashboard() {
           </div>
           <div>
             <span>Pending</span>
-            <strong>{pendingAssignments.length + taskCards.filter((task) => task.badge !== "Assignment").length}</strong>
+            <strong>{pendingLearningCount}</strong>
             <p>Assignments, quizzes, tests</p>
           </div>
           <div>
@@ -428,7 +430,7 @@ export default async function ElearningDashboard() {
             </div>
             {latestAttempt ? (
               <Link
-                href={latestAttempt.quiz.isPracticeTest ? `/elearning/tests/${latestAttempt.quizId}` : `/elearning/exercises/${latestAttempt.quizId}?attempt=${latestAttempt.id}`}
+                href={`/elearning/exercises/${latestAttempt.quizId}?attempt=${latestAttempt.id}`}
                 className={styles.snapshotRow}
               >
                 <ClipboardList size={18} />
@@ -472,282 +474,4 @@ export default async function ElearningDashboard() {
     );
   }
 
-  const teacherScopedWhere = user.role === "TEACHER" ? { classSection: { teacherId: user.id } } : {};
-  const [
-    classes,
-    submissions,
-    grades,
-    recentActivity,
-  ] = await Promise.all([
-    prisma.classSection.findMany({
-      where: classWhere,
-      orderBy: { createdAt: "desc" },
-      include: {
-        course: true,
-        enrollments: {
-          include: { student: true },
-          orderBy: { requestedAt: "desc" },
-        },
-      },
-    }),
-    prisma.submission.findMany({
-      where: user.role === "TEACHER" ? { assignment: { classSection: { teacherId: user.id } } } : {},
-      orderBy: { submittedAt: "desc" },
-      take: 50,
-      include: {
-        grade: true,
-        student: true,
-        assignment: {
-          include: {
-            classSection: { include: { course: true } },
-          },
-        },
-      },
-    }),
-    prisma.grade.findMany({
-      where: user.role === "TEACHER"
-        ? { OR: [{ assignment: teacherScopedWhere }, { quiz: teacherScopedWhere }] }
-        : {},
-      orderBy: { createdAt: "desc" },
-      take: 20,
-      include: { assignment: true, quiz: true, student: true },
-    }),
-    prisma.activityLog.findMany({
-      where: user.role === "TEACHER" ? { actorId: user.id } : {},
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      include: { actor: true },
-    }),
-  ]);
-
-  const activeStudentIds = new Set(
-    classes.flatMap((classSection) => (
-      classSection.enrollments
-        .filter((enrollment) => enrollment.status === "ACTIVE")
-        .map((enrollment) => enrollment.userId)
-    )),
-  );
-  const pendingEnrollmentRequests = classes.flatMap((classSection) => (
-    classSection.enrollments
-      .filter((enrollment) => enrollment.status === "REQUESTED")
-      .map((enrollment) => ({ ...enrollment, classSection }))
-  ));
-  const submissionsToGrade = submissions.filter((submission) => submission.status !== "GRADED" && !submission.grade);
-  const average = grades.length ? grades.reduce((sum, grade) => sum + grade.score, 0) / grades.length : null;
-
-  const actionCards = [
-    { href: "/elearning/courses/new", label: "Create class", detail: "Open a new course section", icon: <BookPlus size={18} /> },
-    { href: "/elearning/classrooms", label: "Review enrollments", detail: `${pendingEnrollmentRequests.length} pending request${pendingEnrollmentRequests.length === 1 ? "" : "s"}`, icon: <UserPlus size={18} /> },
-    { href: "/elearning/classrooms", label: "Create assignment", detail: "Use a class as the starting point", icon: <FileText size={18} /> },
-    { href: "/elearning/practice?tab=quizzes", label: "Build quiz", detail: "Manage class quiz library", icon: <ClipboardList size={18} /> },
-    { href: "/elearning/practice?tab=tests", label: "Practice tests", detail: "Review imported test sets", icon: <FileCheck2 size={18} /> },
-    { href: "/elearning/scores", label: "Open scores", detail: `${submissionsToGrade.length} submission${submissionsToGrade.length === 1 ? "" : "s"} need review`, icon: <Award size={18} /> },
-  ];
-
-  const activityHref = (entityType: string) => {
-    if (entityType === "Enrollment" || entityType === "ClassSection") return "/elearning/classrooms";
-    if (entityType === "Quiz" || entityType === "Attempt" || entityType === "Question") return "/elearning/practice";
-    if (entityType === "Grade" || entityType === "Submission") return "/elearning/scores";
-    if (entityType === "Assignment") return "/elearning/classrooms";
-    return "/elearning";
-  };
-
-  const primaryTeacherAction = submissionsToGrade[0]
-    ? {
-        href: "/elearning/scores",
-        eyebrow: "Grade next",
-        title: submissionsToGrade[0].assignment.title,
-        meta: `${submissionsToGrade[0].student.name || submissionsToGrade[0].student.email} | ${submissionsToGrade[0].assignment.classSection.code}`,
-        icon: <CheckSquare size={22} />,
-      }
-    : pendingEnrollmentRequests[0]
-      ? {
-          href: "/elearning/classrooms",
-          eyebrow: "Enrollment request",
-          title: pendingEnrollmentRequests[0].student.name || pendingEnrollmentRequests[0].student.email || "New student",
-          meta: `${pendingEnrollmentRequests[0].classSection.code} | ${pendingEnrollmentRequests.length} pending`,
-          icon: <UserPlus size={22} />,
-        }
-      : {
-          href: "/elearning/classrooms",
-          eyebrow: "Open workspace",
-          title: "Manage classrooms",
-          meta: `${classes.length} class${classes.length === 1 ? "" : "es"} | ${activeStudentIds.size} active students`,
-          icon: <Users size={22} />,
-        };
-
-  return (
-    <div className={styles.dashboardShell}>
-      <section className={`${styles.dashboardHero} ${styles.dashboardHeroTeacher}`}>
-        <div className={styles.dashboardHeroCopy}>
-          <span className={styles.cockpitEyebrow}><Activity size={16} /> {user.role === "ADMIN" ? "Admin dashboard" : "Teacher dashboard"}</span>
-          <h1>Control the classroom flow.</h1>
-          <p>Queues, class health, and creation tools are grouped around what needs a decision now.</p>
-        </div>
-        <Link href={primaryTeacherAction.href} className={styles.dashboardPrimaryAction}>
-          <div className={styles.dashboardActionIcon}>{primaryTeacherAction.icon}</div>
-          <span>{primaryTeacherAction.eyebrow}</span>
-          <strong>{primaryTeacherAction.title}</strong>
-          <p>{primaryTeacherAction.meta}</p>
-          <em>Open <ArrowRight size={16} /></em>
-        </Link>
-      </section>
-
-      <section className={styles.dashboardStats} aria-label="Teaching status">
-        <div>
-          <span>Classes</span>
-          <strong>{classes.filter((classSection) => classSection.status === "ACTIVE").length}</strong>
-          <p>{classes.length} total</p>
-        </div>
-        <div>
-          <span>Students</span>
-          <strong>{activeStudentIds.size}</strong>
-          <p>Active learners</p>
-        </div>
-        <div>
-          <span>Queue</span>
-          <strong>{submissionsToGrade.length + pendingEnrollmentRequests.length}</strong>
-          <p>Needs action</p>
-        </div>
-      </section>
-
-      <section className={styles.actionHub} aria-label="Teaching actions">
-        {actionCards.slice(0, 4).map((action) => (
-          <Link href={action.href} key={action.label} className={styles.actionHubItem}>
-            <div>{action.icon}</div>
-            <strong>{action.label}</strong>
-            <p>{action.detail}</p>
-            <ArrowRight size={16} />
-          </Link>
-        ))}
-      </section>
-
-      <section className={styles.dashboardMain}>
-        <div className={styles.dashboardPanel}>
-          <div className={styles.dashboardPanelHeader}>
-            <div>
-              <span className={styles.cockpitEyebrow}><CheckSquare size={16} /> Decision queue</span>
-              <h2>Needs review</h2>
-            </div>
-            <Link href="/elearning/scores">Scores</Link>
-          </div>
-          {submissionsToGrade.length > 0 || pendingEnrollmentRequests.length > 0 ? (
-            <div className={styles.focusList}>
-              {submissionsToGrade.slice(0, 4).map((submission) => (
-                <Link href="/elearning/scores" key={submission.id} className={styles.focusItem}>
-                  <div className={styles.taskIcon}><FileText size={18} /></div>
-                  <div>
-                    <strong>{submission.assignment.title}</strong>
-                    <p>{submission.student.name || submission.student.email} | {submission.assignment.classSection.code}</p>
-                  </div>
-                  <span>Grade</span>
-                </Link>
-              ))}
-              {pendingEnrollmentRequests.slice(0, 3).map((enrollment) => (
-                <Link href="/elearning/classrooms" key={enrollment.id} className={styles.focusItem}>
-                  <div className={styles.taskIcon}><UserPlus size={18} /></div>
-                  <div>
-                    <strong>{enrollment.student.name || enrollment.student.email || "Unnamed student"}</strong>
-                    <p>{enrollment.classSection.code} | {enrollment.classSection.course.title}</p>
-                  </div>
-                  <span>Approve</span>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className={styles.emptyStateInline}>
-              <CheckCircle2 size={32} />
-              <p>No enrollment or grading decisions are waiting.</p>
-            </div>
-          )}
-        </div>
-
-        <aside className={styles.dashboardPanel}>
-          <div className={styles.dashboardPanelHeader}>
-            <div>
-              <span className={styles.cockpitEyebrow}><Award size={16} /> Score pulse</span>
-              <h2>Latest results</h2>
-            </div>
-            <Link href="/elearning/scores">All</Link>
-          </div>
-          <div className={styles.teacherPulse}>
-            <strong>{average === null ? "-" : average.toFixed(1)}</strong>
-            <p>Average from recent grades</p>
-          </div>
-          {grades.slice(0, 3).map((grade) => (
-            <Link href="/elearning/scores" key={grade.id} className={styles.snapshotRow}>
-              <Award size={18} />
-              <div>
-                <strong>{grade.assignment?.title || grade.quiz?.title || "Manual grade"}</strong>
-                <p>{grade.student.name || grade.student.email} | {scoreLabel(grade.score)}</p>
-              </div>
-            </Link>
-          ))}
-        </aside>
-      </section>
-
-      <section className={styles.dashboardMain}>
-        <div className={styles.dashboardPanel}>
-          <div className={styles.dashboardPanelHeader}>
-            <div>
-              <span className={styles.cockpitEyebrow}><BookOpen size={16} /> Classes</span>
-              <h2>Current classrooms</h2>
-            </div>
-            <Link href="/elearning/courses/new">New class</Link>
-          </div>
-          {classes.length > 0 ? (
-            <div className={styles.focusList}>
-              {classes.slice(0, 5).map((classSection) => {
-                const activeCount = classSection.enrollments.filter((enrollment) => enrollment.status === "ACTIVE").length;
-                const requestCount = classSection.enrollments.filter((enrollment) => enrollment.status === "REQUESTED").length;
-                return (
-                  <Link href={`/elearning/courses/${classSection.courseId}`} key={classSection.id} className={styles.focusItem}>
-                    <div className={styles.taskIcon}><Users size={18} /></div>
-                    <div>
-                      <strong>{classSection.name}</strong>
-                      <p>{classSection.code} | {classSection.course.title}</p>
-                    </div>
-                    <span>{activeCount} / {requestCount}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ) : (
-            <div className={styles.emptyStateInline}>
-              <AlertCircle size={32} />
-              <p>No classes found. Create a class to start enrolling students.</p>
-            </div>
-          )}
-        </div>
-
-        <aside className={styles.dashboardPanel}>
-          <div className={styles.dashboardPanelHeader}>
-            <div>
-              <span className={styles.cockpitEyebrow}><Activity size={16} /> Activity</span>
-              <h2>Recent movement</h2>
-            </div>
-          </div>
-          {recentActivity.length > 0 ? (
-            <div className={styles.timelineList}>
-              {recentActivity.slice(0, 5).map((activity) => (
-                <Link href={activityHref(activity.entityType)} key={activity.id} className={styles.timelineItem}>
-                  <div className={styles.timelineIcon}><Activity size={16} /></div>
-                  <div>
-                    <strong>{activity.action.replaceAll("_", " ").toLowerCase()}</strong>
-                    <p>{activity.entityType} | {activity.actor?.name || activity.actor?.email || "System"}</p>
-                  </div>
-                  <time>{formatDateTime(activity.createdAt)}</time>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className={styles.emptyStateInline}>
-              <Activity size={32} />
-              <p>Activity logs will appear here as the LMS is used.</p>
-            </div>
-          )}
-        </aside>
-      </section>
-    </div>
-  );
 }

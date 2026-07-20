@@ -1,3 +1,7 @@
+import Link from "next/link";
+
+const programCtaStyle = { display: "inline-flex", marginTop: "16px" };
+
 export default function ProgramsPage() {
   return (
     <div className="container" style={{ padding: "80px 24px" }}>
@@ -10,21 +14,25 @@ export default function ProgramsPage() {
         <section id="kids">
           <h2 style={{ fontSize: "var(--text-2xl)", color: "var(--color-orange)", marginBottom: "16px" }}>Kids & Teens English</h2>
           <p style={{ lineHeight: 1.6 }}>Interactive and engaging English learning programs tailored for children and teenagers to build a strong foundation and confidence.</p>
+          <Link href="/contact?intent=placement-test&program=kids#register" className="btn-secondary" style={programCtaStyle}>Book a placement test</Link>
         </section>
         
         <section id="ielts">
           <h2 style={{ fontSize: "var(--text-2xl)", color: "var(--color-orange)", marginBottom: "16px" }}>IELTS, TOEFL & Test Prep</h2>
           <p style={{ lineHeight: 1.6 }}>Intensive preparation courses to help you achieve your target scores for university admission and international opportunities.</p>
+          <Link href="/contact?intent=placement-test&program=ielts#register" className="btn-secondary" style={programCtaStyle}>Book a placement test</Link>
         </section>
         
         <section id="adults">
           <h2 style={{ fontSize: "var(--text-2xl)", color: "var(--color-orange)", marginBottom: "16px" }}>Adult Learners & Communication</h2>
           <p style={{ lineHeight: 1.6 }}>Practical English for daily life and travel, focusing on listening and speaking skills to boost your confidence in real-world situations.</p>
+          <Link href="/contact?intent=consultation&program=communication#register" className="btn-secondary" style={programCtaStyle}>Get program advice</Link>
         </section>
         
         <section id="corporate">
           <h2 style={{ fontSize: "var(--text-2xl)", color: "var(--color-orange)", marginBottom: "16px" }}>Corporate English</h2>
           <p style={{ lineHeight: 1.6 }}>Customized English training solutions for businesses and organizations to empower their workforce and improve global communication.</p>
+          <Link href="/contact?intent=consultation&program=corporate#register" className="btn-secondary" style={programCtaStyle}>Request consultation</Link>
         </section>
       </div>
     </div>

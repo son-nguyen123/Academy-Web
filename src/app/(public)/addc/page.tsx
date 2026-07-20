@@ -29,7 +29,7 @@ export default function ADDCPage() {
             </h1>
             <p>Empowering kids and teenagers to find their voice, think critically, and debate with confidence.</p>
             <div style={{ display: 'flex', justifyContent: 'center', gap: '16px' }}>
-              <Link href="/contact#register" className="btn-primary">Join the Club</Link>
+              <Link href="/contact?intent=registration&program=addc#register" className="btn-primary">Join the Club</Link>
               <Link href="#about" className="btn-secondary">Learn More</Link>
             </div>
           </div>
@@ -85,7 +85,7 @@ export default function ADDCPage() {
           <h2>Ready to Raise Your Voice?</h2>
           <p style={{ fontSize: "var(--text-xl)" }}>Join ADDC today and become a confident global citizen.</p>
           <div className={styles.ctaButtons}>
-            <Link href="/contact#register" className="btn-secondary">Register Now</Link>
+            <Link href="/contact?intent=registration&program=addc#register" className="btn-secondary">Register Now</Link>
             <Link href="/contact" className="btn-dark">Contact Us</Link>
           </div>
         </div>

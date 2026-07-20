@@ -104,7 +104,7 @@ export default function Home() {
             <p>Academy English Center provides high-quality English programs for kids, teens, IELTS learners, working adults, and corporate teams in Da Nang.</p>
             <div className={styles.heroButtons}>
               <Link href="#programs" className="btn-primary">Find Your Course</Link>
-              <Link href="/contact#register" className="btn-secondary">Book Placement Test</Link>
+              <Link href="/contact?intent=placement-test#register" className="btn-secondary">Book Placement Test</Link>
             </div>
           </div>
           <div className={styles.heroImage}>
@@ -257,7 +257,7 @@ export default function Home() {
           <h2>Not sure which course fits you?</h2>
           <p style={{ fontSize: "var(--text-xl)" }}>Take a placement test and get a personalized learning path.</p>
           <div className={styles.ctaButtons}>
-            <Link href="/contact#register" className="btn-secondary">Book Placement Test</Link>
+            <Link href="/contact?intent=placement-test#register" className="btn-secondary">Book Placement Test</Link>
             <Link href="/contact" className="btn-dark">Contact Us</Link>
           </div>
         </div>

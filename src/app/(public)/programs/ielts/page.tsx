@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import { ProgramPageActions } from '../ProgramPageActions';
 
 export const metadata: Metadata = {
   title: 'IELTS Preparation | Academy',
@@ -10,6 +11,7 @@ export default function IeltsPage() {
     <div className="min-h-screen p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-4">IELTS Preparation</h1>
       <p>Welcome to the IELTS Preparation page. Content coming soon!</p>
+      <ProgramPageActions program="ielts" />
     </div>
   );
 }

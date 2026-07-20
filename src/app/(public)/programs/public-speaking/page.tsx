@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import { ProgramPageActions } from '../ProgramPageActions';
 
 export const metadata: Metadata = {
   title: 'Public Speaking & Skills | Academy',
@@ -10,6 +11,7 @@ export default function PublicSpeakingPage() {
     <div className="min-h-screen p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-4">Public Speaking & Skills</h1>
       <p>Welcome to the Public Speaking & Skills page. Content coming soon!</p>
+      <ProgramPageActions program="public-speaking" />
     </div>
   );
 }

@@ -515,6 +515,36 @@
   color: white;
 }
 
+.ctaButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.submissionNotice,
+.submissionError {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.submissionNotice {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.submissionError {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 .secondaryButton {
   background: #eef2ff;
   color: #4338ca;
@@ -604,4 +634,42 @@
   .modalActions {
     grid-template-columns: 1fr;
   }
+}
+
+/* Final compact overrides */
+.board { max-width: 1320px; margin: 0 auto; }
+.hero { grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.65fr); gap: 0.8rem; margin-bottom: 1rem; }
+.heroCard,
+.celebrationCard,
+.assignmentCard { border: 1px solid #e5e9f2; border-radius: 14px; box-shadow: 0 6px 22px rgba(32, 35, 79, 0.04); }
+.heroCard { padding: 1.15rem 1.25rem; }
+.heroCard::after { display: none; }
+.pageTitle { font-size: clamp(1.55rem, 2.6vw, 2rem); }
+.subtitle { max-width: 700px; font-size: 0.86rem; line-height: 1.5; }
+.countdownBlock { margin-top: 0.85rem; }
+.countdownNumber { font-size: 20px; }
+.celebrationCard { padding: 1rem; align-content: center; }
+.grid { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 0.8rem; }
+.assignmentCard { display: flex; height: 100%; min-height: 225px; flex-direction: column; padding: 0.95rem; border-left-width: 3px; background: #fff; }
+.assignmentCard:hover,
+.assignmentCard:focus-visible { border-color: #c7d2fe; box-shadow: 0 10px 26px rgba(32, 35, 79, 0.07); transform: translateY(-2px); }
+.cardHeader { display: grid; gap: 0.6rem; margin-bottom: 0.65rem; }
+.cardTitle { display: -webkit-box; min-height: 2.5em; overflow: hidden; font-size: 1rem; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.badgeStack { justify-content: flex-start; }
+.difficultyBadge,
+.statusBadge,
+.tag { padding: 0.28rem 0.5rem; font-size: 0.66rem; }
+.metadataStrip { grid-template-columns: 1fr; gap: 0.25rem; padding: 0.6rem; font-size: 0.72rem; }
+.cardFooter { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: auto; padding-top: 0.75rem; border-top: 1px solid #eef1f6; }
+.statusArea { align-items: flex-start; }
+.viewLink { flex: 0 0 auto; padding: 0.45rem 0.65rem; border-radius: 8px; background: #eef2ff; color: #4f46e5; font-size: 0.72rem; font-weight: 850; }
+.viewLink:hover { background: #e0e7ff; }
+
+@media (max-width: 1100px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .hero,
+  .grid { grid-template-columns: 1fr; }
 }

@@ -1,9 +1,10 @@
 "use server";
 
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, requireTeacherOrAdmin, requireUser } from "@/lib/session";
 
@@ -40,22 +41,6 @@ function optionalNumber(formData: FormData, key: string) {
 
   const value = Number(rawValue);
   return Number.isFinite(value) ? value : null;
-}
-
-function limitedText(formData: FormData, key: string, maxLength: number) {
-  const value = textValue(formData, key);
-  return value.length > maxLength ? value.slice(0, maxLength) : value;
-}
-
-function optionalLimitedText(formData: FormData, key: string, maxLength: number) {
-  const value = limitedText(formData, key, maxLength);
-  return value || null;
-}
-
-function addDays(date: Date, days: number) {
-  const nextDate = new Date(date);
-  nextDate.setDate(nextDate.getDate() + days);
-  return nextDate;
 }
 
 function parseOptionRows(value: string) {
@@ -268,6 +253,15 @@ export async function decideEnrollmentAction(formData: FormData) {
   const decision = textValue(formData, "decision");
   if (!id) return;
 
+  const enrollment = await prisma.enrollment.findUnique({
+    where: { id },
+    include: { classSection: { select: { teacherId: true } } },
+  });
+  if (!enrollment) return;
+  if (actor.role === "TEACHER" && enrollment.classSection.teacherId !== actor.id) {
+    throw new Error("You do not have permission to manage this enrollment.");
+  }
+
   const status = decision === "reject" ? "REJECTED" : "ACTIVE";
   await prisma.enrollment.update({
     where: { id },
@@ -281,6 +275,8 @@ export async function decideEnrollmentAction(formData: FormData) {
   await logActivity(actor.id, `${status}_ENROLLMENT`, "Enrollment", id);
   revalidatePath("/admin/enrollments");
   revalidatePath("/admin/classes");
+  revalidatePath("/elearning/classrooms");
+  revalidatePath(`/elearning/classrooms/${enrollment.classSectionId}`);
 }
 
 export async function createLessonAction(formData: FormData) {
@@ -321,8 +317,14 @@ export async function createAssignmentAction(formData: FormData) {
   const title = textValue(formData, "title");
   const classSectionId = textValue(formData, "classSectionId");
   if (!title || !classSectionId) return;
+  const classSection = await prisma.classSection.findUnique({ where: { id: classSectionId }, select: { teacherId: true } });
+  if (!classSection) return;
+  if (actor.role === "TEACHER" && classSection.teacherId !== actor.id) {
+    throw new Error("You do not have permission to create assignments for this classroom.");
+  }
   const status = textValue(formData, "status") as "DRAFT" | "PUBLISHED" | "ARCHIVED";
   const difficulty = textValue(formData, "difficulty") as "EASY" | "MEDIUM" | "HARD";
+  const skill = textValue(formData, "skill") as "LISTENING" | "READING" | "WRITING" | "SPEAKING" | "GRAMMAR" | "VOCABULARY" | "PRONUNCIATION" | "MIXED";
 
   const assignment = await prisma.assignment.create({
     data: {
@@ -332,6 +334,12 @@ export async function createAssignmentAction(formData: FormData) {
       type: textValue(formData, "type") as "HOMEWORK" | "WRITING" | "SPEAKING" | "FILE_UPLOAD",
       status: ["DRAFT", "PUBLISHED", "ARCHIVED"].includes(status) ? status : "PUBLISHED",
       difficulty: ["EASY", "MEDIUM", "HARD"].includes(difficulty) ? difficulty : "MEDIUM",
+      skill: ["LISTENING", "READING", "WRITING", "SPEAKING", "GRAMMAR", "VOCABULARY", "PRONUNCIATION", "MIXED"].includes(skill) ? skill : "MIXED",
+      cefrLevel: optionalText(formData, "cefrLevel"),
+      maxScore: Math.max(1, numberValue(formData, "maxScore", 100)),
+      rubric: optionalText(formData, "rubric"),
+      allowLateSubmission: formData.get("allowLateSubmission") === "on",
+      allowResubmission: formData.get("allowResubmission") === "on",
       category: optionalText(formData, "category"),
       tags: textListValue(formData, "tags"),
       instructions: optionalText(formData, "instructions"),
@@ -345,6 +353,8 @@ export async function createAssignmentAction(formData: FormData) {
   await logActivity(actor.id, "CREATE_ASSIGNMENT", "Assignment", assignment.id);
   revalidatePath("/admin/assignments");
   revalidatePath("/elearning/assignments");
+  revalidatePath(`/elearning/classrooms/${classSectionId}`);
+  revalidatePath("/elearning");
 }
 
 export async function createAssignmentWithStateAction(
@@ -357,11 +367,107 @@ export async function createAssignmentWithStateAction(
     return { ok: false, message: "Please enter a title and choose a class." };
   }
 
-  await createAssignmentAction(formData);
-  const status = textValue(formData, "status") || "PUBLISHED";
+  try {
+    await createAssignmentAction(formData);
+    const status = textValue(formData, "status") || "PUBLISHED";
+    return {
+      ok: true,
+      message: status === "DRAFT" ? "Assignment saved as draft." : "Assignment published successfully.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Could not create the assignment. Please try again.",
+    };
+  }
+}
+
+export type ImportStudentsState = {
+  ok: boolean;
+  message: string;
+  imported: number;
+  skipped: number;
+  createdAccounts: Array<{ email: string; password: string }>;
+};
+
+export async function importStudentsAction(
+  _state: ImportStudentsState,
+  formData: FormData,
+): Promise<ImportStudentsState> {
+  const actor = await requireTeacherOrAdmin();
+  const classSectionId = textValue(formData, "classSectionId");
+  const rows = textValue(formData, "students")
+    .split(/\r?\n/)
+    .map((row) => row.trim())
+    .filter(Boolean)
+    .slice(0, 200);
+
+  if (!classSectionId || !rows.length) {
+    return { ok: false, message: "Enter at least one student.", imported: 0, skipped: 0, createdAccounts: [] };
+  }
+
+  const classroom = await prisma.classSection.findUnique({
+    where: { id: classSectionId },
+    select: { teacherId: true },
+  });
+  if (!classroom || (actor.role === "TEACHER" && classroom.teacherId !== actor.id)) {
+    return { ok: false, message: "You do not have permission to manage this classroom.", imported: 0, skipped: rows.length, createdAccounts: [] };
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  const createdAccounts: Array<{ email: string; password: string }> = [];
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const parts = row.split(/[;,\t]/).map((item) => item.trim());
+    const emailPart = parts.find((item) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item));
+    const email = emailPart?.toLowerCase();
+    const name = parts.find((item) => item !== emailPart) || null;
+
+    if (!email || seen.has(email)) {
+      skipped += 1;
+      continue;
+    }
+    seen.add(email);
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing && !["STUDENT", "USER"].includes(existing.role)) {
+      skipped += 1;
+      continue;
+    }
+
+    const temporaryPassword = randomBytes(8).toString("base64url");
+    const student = existing || await prisma.user.create({
+      data: { id: randomUUID(), name, email, role: "STUDENT", password: await bcrypt.hash(temporaryPassword, 10) },
+    });
+    if (!existing) createdAccounts.push({ email, password: temporaryPassword });
+
+    if (existing?.role === "USER") {
+      await prisma.user.update({ where: { id: existing.id }, data: { role: "STUDENT", name: existing.name || name } });
+    }
+
+    await prisma.enrollment.upsert({
+      where: { userId_classSectionId: { userId: student.id, classSectionId } },
+      update: { status: "ACTIVE", decidedAt: new Date(), decidedById: actor.id },
+      create: { userId: student.id, classSectionId, status: "ACTIVE", decidedAt: new Date(), decidedById: actor.id },
+    });
+    imported += 1;
+  }
+
+  await logActivity(actor.id, "IMPORT_STUDENTS", "ClassSection", classSectionId);
+  revalidatePath("/elearning/classrooms");
+  revalidatePath(`/elearning/classrooms/${classSectionId}`);
+  revalidatePath("/elearning");
+
   return {
-    ok: true,
-    message: status === "DRAFT" ? "Assignment saved as draft." : "Assignment published successfully.",
+    ok: imported > 0,
+    imported,
+    skipped,
+    createdAccounts,
+    message: imported > 0
+      ? `${imported} student${imported === 1 ? "" : "s"} added to the classroom${skipped ? `; ${skipped} row${skipped === 1 ? " was" : "s were"} skipped` : ""}.`
+      : "No students were added. Check the email format or existing account roles.",
   };
 }
 
@@ -379,7 +485,27 @@ export async function deleteAssignmentAction(formData: FormData) {
 export async function submitAssignmentAction(formData: FormData) {
   const actor = await requireUser(["STUDENT"]);
   const assignmentId = textValue(formData, "assignmentId");
-  if (!assignmentId) return;
+  if (!assignmentId) throw new Error("Assignment is missing.");
+
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    include: { classSection: { include: { enrollments: true } } },
+  });
+  const isEnrolled = assignment?.classSection.enrollments.some(
+    (item) => item.userId === actor.id && item.status === "ACTIVE",
+  );
+  if (!assignment || assignment.status !== "PUBLISHED" || assignment.classSection.status !== "ACTIVE") throw new Error("This assignment is no longer available.");
+  if (!isEnrolled) throw new Error("You are not enrolled in this classroom.");
+  if (assignment.dueAt && assignment.dueAt < new Date() && !assignment.allowLateSubmission) {
+    throw new Error("The deadline has passed and late submissions are disabled.");
+  }
+  const existingSubmission = await prisma.submission.findUnique({
+    where: { assignmentId_studentId: { assignmentId, studentId: actor.id } },
+    select: { id: true, status: true },
+  });
+  if (existingSubmission && !assignment.allowResubmission && existingSubmission.status !== "REVISION_REQUESTED") {
+    throw new Error("Your teacher has disabled resubmission for this assignment.");
+  }
 
   await prisma.submission.upsert({
     where: {
@@ -405,8 +531,38 @@ export async function submitAssignmentAction(formData: FormData) {
 
   await logActivity(actor.id, "SUBMIT_ASSIGNMENT", "Assignment", assignmentId);
   revalidatePath("/elearning/assignments");
+  revalidatePath(`/elearning/classrooms/${assignment.classSectionId}`);
+  revalidatePath("/elearning");
   revalidatePath("/admin/assignments");
   revalidatePath("/admin/grades");
+}
+
+export type SubmitAssignmentState = {
+  ok: boolean;
+  message: string;
+  assignmentId: string;
+};
+
+export async function submitAssignmentWithStateAction(
+  _state: SubmitAssignmentState,
+  formData: FormData,
+): Promise<SubmitAssignmentState> {
+  const assignmentId = textValue(formData, "assignmentId");
+
+  try {
+    await submitAssignmentAction(formData);
+    return {
+      ok: true,
+      assignmentId,
+      message: "Your work was submitted successfully.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      assignmentId,
+      message: error instanceof Error ? error.message : "Your work could not be submitted. Please try again.",
+    };
+  }
 }
 
 export async function createQuestionAction(formData: FormData) {
@@ -492,7 +648,7 @@ async function canManageQuiz(quizId: string, actor: { id: string; role: string }
     where: {
       id: quizId,
       isPracticeTest: false,
-      ...(actor.role === "TEACHER" ? { classSection: { teacherId: actor.id } } : {}),
+      ...(actor.role === "TEACHER" ? { OR: [{ createdById: actor.id }, { classSection: { teacherId: actor.id } }, { deliveries: { some: { classSection: { teacherId: actor.id } } } }] } : {}),
     },
     select: { id: true },
   });
@@ -666,7 +822,7 @@ async function canManagePracticeTest(quizId: string, actor: { id: string; role: 
     where: {
       id: quizId,
       isPracticeTest: true,
-      ...(actor.role === "TEACHER" ? { classSection: { teacherId: actor.id } } : {}),
+      ...(actor.role === "TEACHER" ? { OR: [{ createdById: actor.id }, { classSection: { teacherId: actor.id } }, { deliveries: { some: { classSection: { teacherId: actor.id } } } }] } : {}),
     },
     select: { id: true, classSectionId: true },
   });
@@ -684,15 +840,13 @@ export async function createPracticeTestAction(formData: FormData) {
   const actor = await requireTeacherOrAdmin();
   const title = textValue(formData, "title");
   const classSectionId = textValue(formData, "classSectionId");
-  if (!title || !classSectionId) return;
-
-  const classSection = await canManageClassSection(classSectionId, actor);
-  if (!classSection) return;
+  if (!title) return;
+  if (classSectionId && !await canManageClassSection(classSectionId, actor)) return;
 
   const test = await prisma.quiz.create({
     data: {
       title,
-      classSectionId,
+      classSectionId: classSectionId || null,
       description: optionalText(formData, "description"),
       isPracticeTest: true,
       examType: examTypeValue(textValue(formData, "examType")),
@@ -711,7 +865,7 @@ export async function createPracticeTestAction(formData: FormData) {
 
   await logActivity(actor.id, "CREATE_PRACTICE_TEST", "Quiz", test.id);
   revalidatePath("/admin/tests");
-  revalidatePath("/elearning/tests");
+  revalidatePath("/elearning/practice");
 }
 
 export async function createPracticeSectionAction(formData: FormData) {
@@ -737,7 +891,7 @@ export async function createPracticeSectionAction(formData: FormData) {
 
   await logActivity(actor.id, "CREATE_TEST_SECTION", "TestSection", section.id);
   revalidatePath("/admin/tests");
-  revalidatePath(`/elearning/tests/${quizId}`);
+  revalidatePath(`/elearning/exercises/${quizId}`);
 }
 
 export async function createPracticeQuestionAction(formData: FormData) {
@@ -789,7 +943,7 @@ export async function createPracticeQuestionAction(formData: FormData) {
 
   await logActivity(actor.id, "CREATE_TEST_QUESTION", "Question", question.id);
   revalidatePath("/admin/tests");
-  revalidatePath(`/elearning/tests/${quizId}`);
+  revalidatePath(`/elearning/exercises/${quizId}`);
 }
 
 export async function deletePracticeTestAction(formData: FormData) {
@@ -803,7 +957,7 @@ export async function deletePracticeTestAction(formData: FormData) {
   await prisma.quiz.delete({ where: { id } });
   await logActivity(actor.id, "DELETE_PRACTICE_TEST", "Quiz", id);
   revalidatePath("/admin/tests");
-  revalidatePath("/elearning/tests");
+  revalidatePath("/elearning/practice");
 }
 
 type ImportedOption = string | { text?: string; isCorrect?: boolean };
@@ -904,27 +1058,25 @@ async function createImportedPracticeQuestion(
 export async function importPracticeTestJsonAction(formData: FormData) {
   const actor = await requireTeacherOrAdmin();
   const rawJson = textValue(formData, "json");
-  if (!rawJson) return;
+  if (!rawJson) return { ok: false, message: "JSON content is required." };
 
   let payload: ImportedPracticeTest;
   try {
     payload = JSON.parse(rawJson) as ImportedPracticeTest;
   } catch {
-    return;
+    return { ok: false, message: "The JSON content is invalid." };
   }
 
   const classSectionId = textValue(formData, "classSectionId") || payload.classSectionId || "";
   const title = (payload.title || "").trim();
-  if (!title || !classSectionId) return;
-
-  const classSection = await canManageClassSection(classSectionId, actor);
-  if (!classSection) return;
+  if (!title) return { ok: false, message: "A test title is required." };
+  if (classSectionId && !await canManageClassSection(classSectionId, actor)) return { ok: false, message: "You cannot manage that classroom." };
 
   const test = await prisma.quiz.create({
     data: {
       title,
       description: payload.description?.trim() || null,
-      classSectionId,
+      classSectionId: classSectionId || null,
       isPracticeTest: true,
       examType: examTypeValue(payload.examType || ""),
       skill: examSkillValue(payload.skill || "", "MIXED"),
@@ -968,9 +1120,20 @@ export async function importPracticeTestJsonAction(formData: FormData) {
     looseQuestionOrder += 1;
   }
 
+  await prisma.testVersion.create({
+    data: {
+      quizId: test.id,
+      createdById: actor.id,
+      version: 1,
+      changeNote: "Initial test created",
+      snapshot: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonValue,
+    },
+  });
+
   await logActivity(actor.id, "IMPORT_PRACTICE_TEST_JSON", "Quiz", test.id);
   revalidatePath("/admin/tests");
-  revalidatePath("/elearning/tests");
+  revalidatePath("/elearning/practice");
+  return { ok: true, message: "Test imported successfully.", testId: test.id };
 }
 
 export async function startPracticeTestAction(formData: FormData) {
@@ -1006,7 +1169,7 @@ export async function startPracticeTestAction(formData: FormData) {
 
   const inProgressAttempt = test.attempts.find((attempt) => attempt.status === "IN_PROGRESS");
   if (inProgressAttempt) {
-    redirect(`/elearning/tests/${quizId}?attempt=${inProgressAttempt.id}`);
+    redirect(`/elearning/exercises/${quizId}?attempt=${inProgressAttempt.id}`);
   }
 
   if (test.attempts.length >= test.attemptLimit) return;
@@ -1020,8 +1183,8 @@ export async function startPracticeTestAction(formData: FormData) {
   });
 
   await logActivity(actor.id, "START_PRACTICE_TEST", "Attempt", attempt.id);
-  revalidatePath(`/elearning/tests/${quizId}`);
-  redirect(`/elearning/tests/${quizId}?attempt=${attempt.id}`);
+  revalidatePath(`/elearning/exercises/${quizId}`);
+  redirect(`/elearning/exercises/${quizId}?attempt=${attempt.id}`);
 }
 
 export async function savePracticeAnswerAction(formData: FormData) {
@@ -1053,7 +1216,7 @@ export async function savePracticeAnswerAction(formData: FormData) {
   });
 
   await logActivity(actor.id, "SAVE_PRACTICE_ANSWER", "AttemptAnswer", `${attemptId}:${questionId}`);
-  revalidatePath(`/elearning/tests/${attempt.quizId}`);
+  revalidatePath(`/elearning/exercises/${attempt.quizId}`);
 }
 
 async function upsertAttemptGrade(data: {
@@ -1072,6 +1235,8 @@ async function upsertAttemptGrade(data: {
         score: data.score,
         feedback: data.feedback,
         gradedById: data.gradedById || null,
+        status: data.gradedById ? "PUBLISHED" : existingGrade.status,
+        publishedAt: data.gradedById ? new Date() : existingGrade.publishedAt,
       },
     });
     return;
@@ -1085,6 +1250,8 @@ async function upsertAttemptGrade(data: {
       score: data.score,
       feedback: data.feedback,
       gradedById: data.gradedById || null,
+      status: data.gradedById ? "PUBLISHED" : "DRAFT",
+      publishedAt: data.gradedById ? new Date() : null,
     },
   });
 }
@@ -1194,12 +1361,12 @@ export async function submitPracticeTestAttemptAction(formData: FormData) {
   });
 
   await logActivity(actor.id, autoSubmitted ? "AUTO_SUBMIT_PRACTICE_TEST" : "SUBMIT_PRACTICE_TEST", "Attempt", attempt.id);
-  revalidatePath("/elearning/tests");
-  revalidatePath(`/elearning/tests/${attempt.quizId}`);
+  revalidatePath("/elearning/practice");
+  revalidatePath(`/elearning/exercises/${attempt.quizId}`);
   revalidatePath("/elearning/scores");
   revalidatePath("/admin/tests");
   revalidatePath("/admin/grades");
-  redirect("/elearning/tests");
+  redirect("/elearning/practice?tab=tests");
 }
 
 export async function gradePracticeAttemptAction(formData: FormData) {
@@ -1211,10 +1378,7 @@ export async function gradePracticeAttemptAction(formData: FormData) {
   const attempt = await prisma.attempt.findFirst({
     where: {
       id: attemptId,
-      quiz: {
-        isPracticeTest: true,
-        ...(actor.role === "TEACHER" ? { classSection: { teacherId: actor.id } } : {}),
-      },
+      ...(actor.role === "TEACHER" ? { OR: [{ quizDelivery: { classSection: { teacherId: actor.id } } }, { quiz: { classSection: { teacherId: actor.id } } }] } : {}),
     },
     include: { quiz: true },
   });
@@ -1244,14 +1408,19 @@ export async function gradePracticeAttemptAction(formData: FormData) {
 }
 
 export async function submitQuizAttemptAction(formData: FormData) {
-  const actor = await requireUser(["STUDENT", "TEACHER", "ADMIN"]);
+  const actor = await requireUser(["STUDENT"]);
   const quizId = textValue(formData, "quizId");
+  const quizDeliveryId = textValue(formData, "quizDeliveryId") || null;
   if (!quizId) return;
 
   const quiz = await prisma.quiz.findFirst({
     where: { id: quizId },
     include: {
       classSection: { include: { enrollments: true } },
+      deliveries: {
+        where: quizDeliveryId ? { id: quizDeliveryId } : { id: "__none__" },
+        include: { classSection: { include: { enrollments: true } } },
+      },
       questions: {
         orderBy: { order: "asc" },
         include: {
@@ -1266,11 +1435,25 @@ export async function submitQuizAttemptAction(formData: FormData) {
 
   if (!quiz) return;
 
-  const isEnrolled = quiz.classSection?.enrollments?.some(
+  const isEnrolled = quiz.classSection?.status === "ACTIVE" && quiz.classSection.enrollments.some(
+    (enrollment) => enrollment.userId === actor.id && enrollment.status === "ACTIVE",
+  );
+
+  const delivery = quiz.deliveries[0] || null;
+  const deliveryEnrollment = delivery?.classSection.enrollments.some(
     (enrollment) => enrollment.userId === actor.id && enrollment.status === "ACTIVE",
   ) || false;
+  const now = new Date();
+  const deliveryAvailable = delivery
+    && delivery.status === "PUBLISHED"
+    && delivery.classSection.status === "ACTIVE"
+    && (!delivery.openAt || delivery.openAt <= now)
+    && (!delivery.dueAt || delivery.dueAt >= now)
+    && deliveryEnrollment;
+  const scopedAttempts = quiz.attempts.filter((attempt) => attempt.quizDeliveryId === quizDeliveryId);
+  const limit = delivery?.attemptLimit || quiz.attemptLimit;
 
-  if ((!quiz.isOpenQuiz && !quiz.isPracticeTest && !isEnrolled) || quiz.attempts.length >= quiz.attemptLimit) return;
+  if ((!deliveryAvailable && !quiz.isOpenQuiz && !isEnrolled) || scopedAttempts.length >= limit) return;
 
   let score = 0;
   let requiresManualGrade = false;
@@ -1279,6 +1462,7 @@ export async function submitQuizAttemptAction(formData: FormData) {
   const attempt = await prisma.attempt.create({
     data: {
       quizId,
+      quizDeliveryId,
       studentId: actor.id,
       status: "SUBMITTED",
       submittedAt: new Date(),
@@ -1366,7 +1550,7 @@ export async function submitQuizAttemptAction(formData: FormData) {
   revalidatePath(`/elearning/exercises/${quizId}`);
   revalidatePath("/elearning/scores");
   revalidatePath("/admin/grades");
-  redirect(`/elearning/exercises/${quizId}?attempt=${attempt.id}&submitted=1`);
+  redirect(`/elearning/exercises/${quizId}?attempt=${attempt.id}&submitted=1${quizDeliveryId ? `&delivery=${quizDeliveryId}` : ""}`);
 }
 
 export async function startAttemptAction(formData: FormData) {
@@ -1383,9 +1567,9 @@ export async function startAttemptAction(formData: FormData) {
   });
   if (!quiz) return;
 
-  const isEnrolled = quiz.classSection.enrollments.some(
+  const isEnrolled = quiz.classSection?.enrollments.some(
     (enrollment) => enrollment.userId === actor.id && enrollment.status === "ACTIVE",
-  );
+  ) ?? false;
   if ((!quiz.isOpenQuiz && !isEnrolled) || quiz.attempts.length >= quiz.attemptLimit) return;
 
   const attempt = await prisma.attempt.create({
@@ -1439,36 +1623,383 @@ export async function gradeSubmissionAction(formData: FormData) {
   const actor = await requireTeacherOrAdmin();
   const submissionId = textValue(formData, "submissionId");
   const score = numberValue(formData, "score");
+  const mode = textValue(formData, "mode") || "publish";
   if (!submissionId) return;
 
-  const submission = await prisma.submission.findUnique({ where: { id: submissionId } });
-  if (!submission) return;
-
-  await prisma.grade.upsert({
-    where: { submissionId },
-    update: {
-      score,
-      feedback: optionalText(formData, "feedback"),
-      gradedById: actor.id,
-    },
-    create: {
-      submissionId,
-      studentId: submission.studentId,
-      assignmentId: submission.assignmentId,
-      score,
-      feedback: optionalText(formData, "feedback"),
-      gradedById: actor.id,
-    },
-  });
-
-  await prisma.submission.update({
+  const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
-    data: { status: "GRADED" },
+    include: { assignment: { include: { classSection: { select: { teacherId: true } } } } },
   });
+  if (!submission) return;
+  if (actor.role === "TEACHER" && submission.assignment.classSection.teacherId !== actor.id) {
+    throw new Error("You do not have permission to grade this submission.");
+  }
+
+  const normalizedScore = Math.min(submission.assignment.maxScore, Math.max(0, score));
+  const gradeStatus = mode === "save_draft" ? "DRAFT" : mode === "request_revision" ? "REVISION_REQUESTED" : "PUBLISHED";
+  const submissionStatus = mode === "request_revision" ? "REVISION_REQUESTED" : mode === "save_draft" ? "SUBMITTED" : "GRADED";
+
+  await prisma.$transaction([
+    prisma.grade.upsert({
+      where: { submissionId },
+      update: { score: normalizedScore, feedback: optionalText(formData, "feedback"), gradedById: actor.id, status: gradeStatus, publishedAt: gradeStatus === "PUBLISHED" ? new Date() : null },
+      create: { submissionId, studentId: submission.studentId, assignmentId: submission.assignmentId, score: normalizedScore, feedback: optionalText(formData, "feedback"), gradedById: actor.id, status: gradeStatus, publishedAt: gradeStatus === "PUBLISHED" ? new Date() : null },
+    }),
+    prisma.submission.update({ where: { id: submissionId }, data: { status: submissionStatus } }),
+  ]);
 
   await logActivity(actor.id, "GRADE_SUBMISSION", "Submission", submissionId);
   revalidatePath("/admin/grades");
   revalidatePath("/elearning/scores");
+  revalidatePath(`/elearning/classrooms/${submission.assignment.classSectionId}`);
+  revalidatePath("/elearning");
+}
+
+export async function gradeSubmissionWithStateAction(
+  _state: { ok: boolean; message: string },
+  formData: FormData,
+) {
+  const scoreText = textValue(formData, "score");
+  const score = Number(scoreText);
+  const maxScore = Math.max(1, numberValue(formData, "maxScore", 100));
+  if (!scoreText || !Number.isFinite(score) || score < 0 || score > maxScore) {
+    return { ok: false, message: `Enter a score between 0 and ${maxScore}.` };
+  }
+  try {
+    await gradeSubmissionAction(formData);
+    const mode = textValue(formData, "mode") || "publish";
+    return { ok: true, message: mode === "save_draft" ? "Grading draft saved." : mode === "request_revision" ? "Revision requested from the student." : "Score and feedback published to the student." };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Could not publish this score." };
+  }
+}
+
+export async function assignLessonToClassAction(formData: FormData) {
+  const actor = await requireTeacherOrAdmin();
+  const lessonId = textValue(formData, "lessonId");
+  const classSectionId = textValue(formData, "classSectionId");
+  if (!lessonId || !classSectionId) return;
+
+  const classroom = await canManageClassSection(classSectionId, actor);
+  const lesson = await prisma.lesson.findUnique({ where: { id: lessonId }, select: { id: true, courseId: true } });
+  const classCourse = await prisma.classSection.findUnique({ where: { id: classSectionId }, select: { courseId: true } });
+  if (!classroom || !lesson || !classCourse || lesson.courseId !== classCourse.courseId) {
+    throw new Error("This lesson does not belong to the classroom course.");
+  }
+
+  await prisma.lessonDelivery.upsert({
+    where: { lessonId_classSectionId: { lessonId, classSectionId } },
+    update: {
+      status: "PUBLISHED",
+      availableAt: optionalDate(formData, "availableAt"),
+      dueAt: optionalDate(formData, "dueAt"),
+      assignedById: actor.id,
+    },
+    create: {
+      lessonId,
+      classSectionId,
+      assignedById: actor.id,
+      status: "PUBLISHED",
+      availableAt: optionalDate(formData, "availableAt"),
+      dueAt: optionalDate(formData, "dueAt"),
+    },
+  });
+
+  await logActivity(actor.id, "ASSIGN_LESSON", "LessonDelivery", `${lessonId}:${classSectionId}`);
+  revalidatePath(`/elearning/classrooms/${classSectionId}`);
+  revalidatePath("/elearning/courses");
+  revalidatePath("/elearning");
+}
+
+export async function assignQuizToClassAction(formData: FormData) {
+  const actor = await requireTeacherOrAdmin();
+  const quizId = textValue(formData, "quizId");
+  const classSectionId = textValue(formData, "classSectionId");
+  if (!quizId || !classSectionId) return;
+
+  const [classroom, quiz] = await Promise.all([
+    canManageClassSection(classSectionId, actor),
+    prisma.quiz.findUnique({ where: { id: quizId }, select: { id: true, published: true, attemptLimit: true } }),
+  ]);
+  if (!classroom || !quiz || !quiz.published) throw new Error("The selected test is not available to assign.");
+
+  await prisma.quizDelivery.upsert({
+    where: { quizId_classSectionId: { quizId, classSectionId } },
+    update: {
+      status: "PUBLISHED",
+      openAt: optionalDate(formData, "openAt"),
+      dueAt: optionalDate(formData, "dueAt"),
+      showAnswersAt: optionalDate(formData, "showAnswersAt"),
+      attemptLimit: Math.max(1, numberValue(formData, "attemptLimit", quiz.attemptLimit)),
+      assignedById: actor.id,
+    },
+    create: {
+      quizId,
+      classSectionId,
+      assignedById: actor.id,
+      status: "PUBLISHED",
+      openAt: optionalDate(formData, "openAt"),
+      dueAt: optionalDate(formData, "dueAt"),
+      showAnswersAt: optionalDate(formData, "showAnswersAt"),
+      attemptLimit: Math.max(1, numberValue(formData, "attemptLimit", quiz.attemptLimit)),
+    },
+  });
+
+  await logActivity(actor.id, "ASSIGN_QUIZ", "QuizDelivery", `${quizId}:${classSectionId}`);
+  revalidatePath(`/elearning/classrooms/${classSectionId}`);
+  revalidatePath("/elearning/practice");
+  revalidatePath("/elearning");
+}
+
+export async function markLessonProgressAction(formData: FormData) {
+  const actor = await requireUser(["STUDENT"]);
+  const lessonDeliveryId = textValue(formData, "lessonDeliveryId");
+  const requestedStatus = textValue(formData, "status");
+  const status = requestedStatus === "COMPLETED" ? "COMPLETED" : "IN_PROGRESS";
+  if (!lessonDeliveryId) return;
+
+  const delivery = await prisma.lessonDelivery.findFirst({
+    where: {
+      id: lessonDeliveryId,
+      status: "PUBLISHED",
+      classSection: { enrollments: { some: { userId: actor.id, status: "ACTIVE" } } },
+    },
+    select: { id: true, lessonId: true },
+  });
+  if (!delivery) throw new Error("This lesson has not been assigned to you.");
+
+  await prisma.lessonProgress.upsert({
+    where: { lessonDeliveryId_studentId: { lessonDeliveryId, studentId: actor.id } },
+    update: {
+      status,
+      startedAt: new Date(),
+      completedAt: status === "COMPLETED" ? new Date() : null,
+    },
+    create: {
+      lessonDeliveryId,
+      studentId: actor.id,
+      status,
+      startedAt: new Date(),
+      completedAt: status === "COMPLETED" ? new Date() : null,
+    },
+  });
+
+  revalidatePath(`/elearning/learn/${delivery.lessonId}`);
+  revalidatePath("/elearning");
+}
+
+type AiWritingGrade = {
+  score: number;
+  confidence: number;
+  feedback: string;
+  strengths: string[];
+  improvements: string[];
+  rubric: Array<{ criterion: string; score: number; comment: string }>;
+};
+
+function responseOutputText(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "";
+  const data = payload as { output_text?: unknown; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+  if (typeof data.output_text === "string") return data.output_text;
+  return data.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text || "";
+}
+
+export async function aiGradeWritingSubmissionAction(
+  _state: { ok: boolean; message: string },
+  formData: FormData,
+) {
+  const actor = await requireTeacherOrAdmin();
+  const submissionId = textValue(formData, "submissionId");
+  if (!submissionId) return { ok: false, message: "Submission is missing." };
+
+  const submission = await prisma.submission.findUnique({
+    where: { id: submissionId },
+    include: { student: true, assignment: { include: { classSection: true } } },
+  });
+  if (!submission || (actor.role === "TEACHER" && submission.assignment.classSection.teacherId !== actor.id)) {
+    return { ok: false, message: "You do not have permission to review this submission." };
+  }
+  if (!submission.content?.trim()) return { ok: false, message: "AI grading requires a written response." };
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { ok: false, message: "Set OPENAI_API_KEY to enable AI grading. Manual grading remains available." };
+
+  const model = process.env.OPENAI_GRADING_MODEL || "gpt-5.4-mini";
+  const maxScore = submission.assignment.maxScore;
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["score", "confidence", "feedback", "strengths", "improvements", "rubric"],
+    properties: {
+      score: { type: "number", minimum: 0, maximum: maxScore },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      feedback: { type: "string" },
+      strengths: { type: "array", items: { type: "string" } },
+      improvements: { type: "array", items: { type: "string" } },
+      rubric: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["criterion", "score", "comment"],
+          properties: {
+            criterion: { type: "string" },
+            score: { type: "number", minimum: 0, maximum: maxScore },
+            comment: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: "You are an English writing assessment assistant. Apply the teacher rubric exactly. Return a conservative draft score and actionable feedback. Your result is advisory and must be approved by a teacher." }],
+          },
+          {
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: `Assignment: ${submission.assignment.title}\nLevel: ${submission.assignment.cefrLevel || "Not specified"}\nMaximum score: ${maxScore}\nTeacher rubric: ${submission.assignment.rubric || "Assess task achievement, coherence, vocabulary, and grammar."}\nInstructions: ${submission.assignment.instructions || submission.assignment.description || "No extra instructions."}\n\nStudent response:\n${submission.content}`,
+            }],
+          },
+        ],
+        text: { format: { type: "json_schema", name: "writing_grade", strict: true, schema } },
+      }),
+    });
+    if (!response.ok) throw new Error(`OpenAI request failed (${response.status}).`);
+    const payload = await response.json();
+    const result = JSON.parse(responseOutputText(payload)) as AiWritingGrade;
+    const score = Math.min(maxScore, Math.max(0, result.score));
+    const feedback = `${result.feedback}\n\nStrengths:\n- ${result.strengths.join("\n- ")}\n\nImprovements:\n- ${result.improvements.join("\n- ")}`;
+
+    await prisma.grade.upsert({
+      where: { submissionId },
+      update: { score, feedback, status: "DRAFT", aiScore: score, aiFeedback: feedback, aiRubric: result.rubric, aiConfidence: result.confidence, aiModel: model, aiReviewedAt: new Date() },
+      create: { submissionId, assignmentId: submission.assignmentId, studentId: submission.studentId, score, feedback, status: "DRAFT", aiScore: score, aiFeedback: feedback, aiRubric: result.rubric, aiConfidence: result.confidence, aiModel: model, aiReviewedAt: new Date() },
+    });
+    await logActivity(actor.id, "AI_GRADE_DRAFT", "Submission", submissionId);
+    revalidatePath("/elearning/scores");
+    revalidatePath("/elearning");
+    return { ok: true, message: "AI draft created. Review the score and feedback before publishing." };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "AI grading could not be completed." };
+  }
+}
+
+export async function aiGradeWritingAttemptAction(
+  _state: { ok: boolean; message: string },
+  formData: FormData,
+) {
+  const actor = await requireTeacherOrAdmin();
+  const attemptId = textValue(formData, "attemptId");
+  if (!attemptId) return { ok: false, message: "Attempt is missing." };
+
+  const attempt = await prisma.attempt.findUnique({
+    where: { id: attemptId },
+    include: {
+      student: true,
+      quizDelivery: { include: { classSection: true } },
+      quiz: {
+        include: {
+          classSection: true,
+          questions: { include: { question: true } },
+        },
+      },
+      answers: { include: { question: true } },
+    },
+  });
+  const teacherOwnsAttempt = attempt && (
+    attempt.quizDelivery?.classSection.teacherId === actor.id || attempt.quiz.classSection?.teacherId === actor.id
+  );
+  if (!attempt || (actor.role === "TEACHER" && !teacherOwnsAttempt)) {
+    return { ok: false, message: "You do not have permission to review this attempt." };
+  }
+
+  const writtenAnswers = attempt.answers.filter((answer) =>
+    Boolean(answer.answerText?.trim()) && ["ESSAY", "SHORT_ANSWER"].includes(answer.question.type),
+  );
+  if (!writtenAnswers.length) return { ok: false, message: "AI grading requires at least one written response." };
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { ok: false, message: "Set OPENAI_API_KEY to enable AI grading. Manual grading remains available." };
+
+  const pointByQuestion = new Map(attempt.quiz.questions.map((link) => [link.questionId, link.points]));
+  const writingMaxScore = writtenAnswers.reduce((sum, answer) => sum + (pointByQuestion.get(answer.questionId) || 0), 0);
+  if (writingMaxScore <= 0) return { ok: false, message: "Written questions need a positive point value before AI grading." };
+  const autoScore = attempt.answers
+    .filter((answer) => !writtenAnswers.some((written) => written.id === answer.id))
+    .reduce((sum, answer) => sum + (answer.pointsAwarded || 0), 0);
+  const totalMaxScore = attempt.quiz.questions.reduce((sum, link) => sum + link.points, 0);
+  const model = process.env.OPENAI_GRADING_MODEL || "gpt-5.4-mini";
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["score", "confidence", "feedback", "strengths", "improvements", "rubric"],
+    properties: {
+      score: { type: "number", minimum: 0, maximum: writingMaxScore },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      feedback: { type: "string" },
+      strengths: { type: "array", items: { type: "string" } },
+      improvements: { type: "array", items: { type: "string" } },
+      rubric: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["criterion", "score", "comment"],
+          properties: {
+            criterion: { type: "string" },
+            score: { type: "number", minimum: 0, maximum: writingMaxScore },
+            comment: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+
+  try {
+    const responses = writtenAnswers.map((answer, index) =>
+      `Question ${index + 1} (${pointByQuestion.get(answer.questionId) || 0} points): ${answer.question.text}\nStudent response: ${answer.answerText}`,
+    ).join("\n\n");
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        input: [
+          { role: "system", content: [{ type: "input_text", text: "You are an English writing assessment assistant. Produce a conservative advisory draft. A teacher must review and publish the final grade." }] },
+          { role: "user", content: [{ type: "input_text", text: `Test: ${attempt.quiz.title}\nMaximum writing score: ${writingMaxScore}\nInstructions: ${attempt.quiz.instructions || attempt.quiz.description || "Assess task achievement, coherence, vocabulary, and grammar."}\n\n${responses}` }] },
+        ],
+        text: { format: { type: "json_schema", name: "test_writing_grade", strict: true, schema } },
+      }),
+    });
+    if (!response.ok) throw new Error(`OpenAI request failed (${response.status}).`);
+    const payload = await response.json();
+    const result = JSON.parse(responseOutputText(payload)) as AiWritingGrade;
+    const writingScore = Math.min(writingMaxScore, Math.max(0, result.score));
+    const score = Math.min(totalMaxScore, autoScore + writingScore);
+    const feedback = `${result.feedback}\n\nStrengths:\n- ${result.strengths.join("\n- ")}\n\nImprovements:\n- ${result.improvements.join("\n- ")}`;
+    const existingGrade = await prisma.grade.findFirst({ where: { attemptId } });
+    const gradeData = { score, feedback, status: "DRAFT" as const, publishedAt: null, gradedById: null, aiScore: score, aiFeedback: feedback, aiRubric: result.rubric, aiConfidence: result.confidence, aiModel: model, aiReviewedAt: new Date() };
+    if (existingGrade) await prisma.grade.update({ where: { id: existingGrade.id }, data: gradeData });
+    else await prisma.grade.create({ data: { ...gradeData, attemptId, quizId: attempt.quizId, studentId: attempt.studentId } });
+
+    await logActivity(actor.id, "AI_GRADE_DRAFT", "Attempt", attemptId);
+    revalidatePath(`/elearning/exercises/${attempt.quizId}`);
+    revalidatePath("/elearning/scores");
+    revalidatePath("/elearning");
+    return { ok: true, message: "AI draft created. Review and publish the final score below." };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "AI grading could not be completed." };
+  }
 }
 
 

@@ -13,6 +13,7 @@ import {
 import styles from "../elearning.module.css";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import type { Prisma } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ type Props = {
 };
 
 type QuizStatus = "not_started" | "in_progress" | "completed";
+type ClassQuizRecord = Prisma.QuizGetPayload<{ include: { program: true; classSection: { include: { course: true } }; questions: true; attempts: { include: { answers: true } } } }>;
 
 const programOrder = ["IEPREP", "PREIE", "IE4.0", "IE5.0", "IE5.5", "IE6.0", "IE6.5", "IE7.0"];
 
@@ -77,33 +79,40 @@ export async function ClassQuizzesTab({ searchParams }: Props) {
   const searchTerm = searchValue(resolvedSearchParams?.q);
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
-  const quizzes = await prisma.quiz.findMany({
-    where: user.role === "STUDENT"
-      ? {
-          isPracticeTest: false,
-          published: true,
-          OR: [
-            { isOpenQuiz: true },
-            { classSection: { enrollments: { some: { userId: user.id, status: "ACTIVE" } } } },
-          ],
-        }
-      : user.role === "TEACHER"
-        ? { isPracticeTest: false, OR: [{ isOpenQuiz: true }, { classSection: { teacherId: user.id } }] }
-        : { isPracticeTest: false },
-    orderBy: { createdAt: "desc" },
-    include: {
-      program: true,
-      classSection: { include: { course: true } },
-      questions: true,
-      attempts: {
-        where: user.role === "STUDENT" ? { studentId: user.id } : {},
-        orderBy: { startedAt: "desc" },
-        include: { answers: true },
+  let quizzes: ClassQuizRecord[] = [];
+
+  try {
+    quizzes = await prisma.quiz.findMany({
+      where: user.role === "STUDENT"
+        ? {
+            isPracticeTest: false,
+            published: true,
+            OR: [
+              { isOpenQuiz: true },
+              { classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } },
+            ],
+          }
+        : user.role === "TEACHER"
+          ? { isPracticeTest: false, OR: [{ isOpenQuiz: true }, { classSection: { teacherId: user.id } }] }
+          : { isPracticeTest: false },
+      orderBy: { createdAt: "desc" },
+      include: {
+        program: true,
+        classSection: { include: { course: true } },
+        questions: true,
+        attempts: {
+          where: user.role === "STUDENT" ? { studentId: user.id } : {},
+          orderBy: { startedAt: "desc" },
+          include: { answers: true },
+        },
       },
-    },
-  });
+    });
+  } catch (error) {
+    console.error("Failed to load class quizzes:", error);
+  }
 
   const cards = quizzes.map((quiz) => {
+    if (!quiz.classSection) return null;
     const inProgressAttempt = quiz.attempts.find((attempt) => attempt.status === "IN_PROGRESS") || null;
     const completedAttempts = quiz.attempts.filter((attempt) => attempt.status !== "IN_PROGRESS");
     const bestScore = completedAttempts.reduce<number | null>((best, attempt) => {
@@ -148,7 +157,7 @@ export async function ClassQuizzesTab({ searchParams }: Props) {
         quiz.classSection.course.title,
       ].filter(Boolean).join(" ").toLowerCase(),
     };
-  });
+  }).filter((card): card is NonNullable<typeof card> => Boolean(card));
 
   const programOptions = uniqueBy(
     cards

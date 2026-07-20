@@ -7,7 +7,9 @@ import {
   Award,
   BookOpen,
   ClipboardList,
+  ClipboardCheck,
   GraduationCap,
+  Globe2,
   LayoutDashboard,
   LogOut,
   Settings,
@@ -21,13 +23,22 @@ type SidebarUser = {
   role: string;
 };
 
-const navItems = [
+const studentNavItems = [
   { name: "Dashboard", path: "/elearning", icon: LayoutDashboard },
-  { name: "Courses", path: "/elearning/courses", icon: BookOpen },
-  { name: "Classrooms", path: "/elearning/classrooms", icon: Users },
-  { name: "Practice", path: "/elearning/practice", icon: ClipboardList },
-  { name: "Assignments", path: "/elearning/assignments", icon: GraduationCap, roles: ["STUDENT"] },
-  { name: "Scores", path: "/elearning/scores", icon: Award },
+  { name: "My Classrooms", path: "/elearning/classrooms", icon: Users },
+  { name: "Course Content", path: "/elearning/courses", icon: BookOpen },
+  { name: "My Work", path: "/elearning/assignments", icon: GraduationCap },
+  { name: "Practice & Tests", path: "/elearning/practice", icon: ClipboardList },
+  { name: "Results & Feedback", path: "/elearning/scores", icon: Award },
+];
+
+const teacherNavItems = [
+  { name: "Workspace", path: "/elearning", icon: LayoutDashboard },
+  { name: "My Classrooms", path: "/elearning/classrooms", icon: Users },
+  { name: "Course Library", path: "/elearning/courses", icon: BookOpen },
+  { name: "Assignments", path: "/elearning/assignments", icon: GraduationCap },
+  { name: "Test Library", path: "/elearning/practice", icon: ClipboardList },
+  { name: "Review & Scores", path: "/elearning/scores", icon: ClipboardCheck },
 ];
 
 function isActivePath(pathname: string, path: string) {
@@ -46,6 +57,7 @@ function isActivePath(pathname: string, path: string) {
 export function ElearningSidebar({ user }: { user: SidebarUser }) {
   const pathname = usePathname();
   const initial = (user.name || user.email || "U").charAt(0).toUpperCase();
+  const navItems = user.role === "STUDENT" ? studentNavItems : teacherNavItems;
 
   return (
     <aside className={styles.sidebar}>
@@ -74,7 +86,7 @@ export function ElearningSidebar({ user }: { user: SidebarUser }) {
       </div>
 
       <nav className={styles.sidebarNav} aria-label="E-learning navigation">
-        {navItems.filter((item) => !item.roles || item.roles.includes(user.role)).map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon;
           const active = isActivePath(pathname, item.path);
           return (
@@ -101,6 +113,10 @@ export function ElearningSidebar({ user }: { user: SidebarUser }) {
       </nav>
 
       <div className={styles.sidebarFooter}>
+        <Link className={styles.navLink} href="/">
+          <Globe2 size={20} />
+          Public website
+        </Link>
         <Link className={styles.navLink} href="/api/auth/signout">
           <LogOut size={20} />
           Logout

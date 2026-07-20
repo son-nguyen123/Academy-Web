@@ -1,55 +1,39 @@
 import Link from "next/link";
-import { BookOpen, PlayCircle } from "lucide-react";
-import styles from "../elearning.module.css";
+import { BookOpen, CheckCircle2, Layers3, Plus, School, Users } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { ElearningBreadcrumbs } from "../ElearningBreadcrumbs";
+import styles from "../elearning.module.css";
 
 export const dynamic = "force-dynamic";
 
 export default async function CoursesPage() {
   const user = await requireUser();
+  const isManager = user.role === "TEACHER" || user.role === "ADMIN";
   const courses = await prisma.course.findMany({
-    where: user.role === "STUDENT"
-      ? { classes: { some: { enrollments: { some: { userId: user.id, status: "ACTIVE" } } } } }
-      : user.role === "TEACHER"
-        ? { classes: { some: { teacherId: user.id } } }
-        : {},
-    orderBy: { createdAt: "desc" },
+    where: user.role === "STUDENT" ? { published: true, classes: { some: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } } } : {},
+    orderBy: [{ published: "desc" }, { updatedAt: "desc" }],
     include: {
-      lessons: true,
-      classes: { include: { enrollments: { where: { status: "ACTIVE" } } } },
+      _count: { select: { lessons: true, classes: true } },
+      classes: { include: { enrollments: { where: { status: "ACTIVE" }, select: { id: true } } } },
     },
   });
 
-  return (
-    <div>
-      <div className={styles.flexBetween} style={{ marginBottom: "2rem" }}>
-        <h1 style={{ margin: 0 }}>{user.role === "STUDENT" ? "My Courses" : "Courses"}</h1>
-      </div>
+  return <main className={styles.courseLibraryPage}>
+    <ElearningBreadcrumbs items={[{ label: isManager ? "Course Library" : "My Courses" }]} />
+    <header className={styles.workflowHero}>
+      <div><span><Layers3 size={16} /> {isManager ? "Reusable curriculum" : "Learning content"}</span><h1>{isManager ? "Course Library" : "My Courses"}</h1><p>{isManager ? "Create curriculum once and reuse it across different teachers, cohorts and schedules." : "Open the course content connected to your active classrooms."}</p></div>
+      {isManager ? <Link href="/elearning/courses/new" className="btn-primary"><Plus size={16} /> New course template</Link> : null}
+    </header>
 
-      <div className={styles.courseGrid}>
-        {courses.map((course) => (
-          <Link href={`/elearning/courses/${course.id}`} key={course.id} style={{ textDecoration: "none", color: "inherit" }}>
-            <div className={styles.courseCard}>
-              <div className={styles.courseImage}><BookOpen size={48} opacity={0.5} /></div>
-              <div className={styles.courseContent}>
-                <h3>{course.title}</h3>
-                <p>{course.description}</p>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "0.75rem", color: "var(--text-muted)" }}>
-                  <span>{course.lessons.length} lessons</span>
-                  <span>{course.classes.reduce((sum, classSection) => sum + classSection.enrollments.length, 0)} enrolled</span>
-                </div>
-                <div className={styles.progressBar} aria-hidden="true"><div className={styles.progressFill} style={{ width: course.lessons.length > 0 ? "100%" : "0%" }} /></div>
-                <div style={{ marginTop: "1rem", display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--color-orange)", fontWeight: 500 }}>
-                  <PlayCircle size={18} /> View Course
-                </div>
-              </div>
-            </div>
-          </Link>
-        ))}
-      </div>
-
-      {courses.length === 0 && <div className={styles.panel}>No active courses found for your account.</div>}
-    </div>
-  );
+    {courses.length ? <div className={styles.templateGrid}>{courses.map((course) => {
+      const students = course.classes.reduce((sum, classroom) => sum + classroom.enrollments.length, 0);
+      return <Link href={`/elearning/courses/${course.id}`} className={styles.templateCard} key={course.id}>
+        <div className={styles.templateCardTop}><span><BookOpen size={18} /></span><small className={course.published ? styles.templatePublished : styles.templateDraft}>{course.published ? "Published" : "Draft"}</small></div>
+        <h2>{course.title}</h2>
+        <div className={styles.templateTags}>{course.program ? <span>{course.program}</span> : null}{course.curriculum ? <span>{course.curriculum}</span> : null}</div>
+        <footer><span><BookOpen size={14} /> {course._count.lessons} lessons</span><span><School size={14} /> {course._count.classes} classrooms</span><span><Users size={14} /> {students} students</span></footer>
+      </Link>;
+    })}</div> : <div className={styles.workflowEmpty}><CheckCircle2 size={28} /><p>{isManager ? "No reusable course templates yet." : "No course content is connected to your active classrooms."}</p>{isManager ? <Link href="/elearning/courses/new" className="btn-primary">Create first course template</Link> : null}</div>}
+  </main>;
 }

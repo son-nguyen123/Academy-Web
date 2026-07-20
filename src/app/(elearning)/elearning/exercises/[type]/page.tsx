@@ -4,7 +4,6 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
-  ChevronLeft,
   Clock,
   RotateCcw,
   Send,
@@ -14,15 +13,17 @@ import {
 } from "lucide-react";
 import { notFound } from "next/navigation";
 import styles from "../../elearning.module.css";
-import { submitQuizAttemptAction } from "@/lib/lmsActions";
+import { gradePracticeAttemptAction, submitQuizAttemptAction } from "@/lib/lmsActions";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import AutoSubmitTimer from "./AutoSubmitTimer";
 import ReviewQuestionMap from "./ReviewQuestionMap";
+import AiGradeAttemptButton from "./AiGradeAttemptButton";
+import { ElearningBreadcrumbs } from "../../ElearningBreadcrumbs";
 
 type Props = {
   params: Promise<{ type: string }>;
-  searchParams?: Promise<{ attempt?: string; submitted?: string }>;
+  searchParams?: Promise<{ attempt?: string; submitted?: string; delivery?: string }>;
 };
 
 type QuestionState = "correct" | "wrong" | "blank" | "pending";
@@ -172,8 +173,12 @@ export default async function QuizAttemptPage({ params, searchParams }: Props) {
     include: {
       program: true,
       classSection: { include: { course: true, enrollments: true } },
+      deliveries: {
+        include: { classSection: { include: { course: true, enrollments: true } } },
+        orderBy: { createdAt: "desc" },
+      },
       attempts: {
-        where: { studentId: user.id },
+        where: user.role === "STUDENT" ? { studentId: user.id } : resolvedSearchParams?.attempt ? { id: resolvedSearchParams.attempt } : { studentId: user.id },
         orderBy: { startedAt: "desc" },
         include: { answers: { include: { option: true } }, grades: true },
       },
@@ -190,24 +195,38 @@ export default async function QuizAttemptPage({ params, searchParams }: Props) {
 
   if (!quiz) notFound();
 
+  const now = new Date();
+  const requestedDelivery = resolvedSearchParams?.delivery;
+  const activeDelivery = quiz.deliveries.find((delivery) => {
+    if (requestedDelivery && delivery.id !== requestedDelivery) return false;
+    if (delivery.status !== "PUBLISHED") return false;
+    if (delivery.openAt && delivery.openAt > now) return false;
+    if (delivery.dueAt && delivery.dueAt < now) return false;
+    return user.role !== "STUDENT" || (delivery.classSection.status === "ACTIVE" && delivery.classSection.enrollments.some(
+      (enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE",
+    ));
+  }) || null;
+
   let canView = true;
   if (user.role === "STUDENT") {
-    if (!quiz.isPracticeTest && !quiz.isOpenQuiz) {
-      const isEnrolled = quiz.classSection?.enrollments.some(
-        (enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE"
-      );
-      if (!isEnrolled) canView = false;
-    }
+    const hasLegacyAccess = quiz.classSection?.status === "ACTIVE" && quiz.classSection.enrollments.some(
+      (enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE",
+    );
+    if (!activeDelivery && !quiz.isOpenQuiz && !hasLegacyAccess) canView = false;
   }
   
   if (!canView) notFound();
 
-  const attemptCount = quiz.attempts.length;
+  const deliveryAttempts = activeDelivery
+    ? quiz.attempts.filter((attempt) => attempt.quizDeliveryId === activeDelivery.id)
+    : quiz.attempts.filter((attempt) => !attempt.quizDeliveryId);
+  const attemptCount = deliveryAttempts.length;
+  const attemptLimit = activeDelivery?.attemptLimit || quiz.attemptLimit;
   const selectedAttemptId = resolvedSearchParams?.attempt;
   const reviewAttempt = selectedAttemptId ? quiz.attempts.find((attempt) => attempt.id === selectedAttemptId) || null : null;
   const reviewMode = Boolean(reviewAttempt);
-  const canTakeQuiz = user.role === "STUDENT" || user.role === "TEACHER" || user.role === "ADMIN";
-  const canAnswer = canTakeQuiz && !reviewMode && attemptCount < quiz.attemptLimit;
+  const canTakeQuiz = user.role === "STUDENT";
+  const canAnswer = canTakeQuiz && !reviewMode && attemptCount < attemptLimit;
   const reviewAnswerMap = new Map(reviewAttempt?.answers.map((answer) => [answer.questionId, answer]) || []);
   const totalPoints = quiz.questions.reduce((sum, link) => sum + link.points, 0);
   const reviewedQuestions = quiz.questions.map((link, index) => {
@@ -383,9 +402,11 @@ export default async function QuizAttemptPage({ params, searchParams }: Props) {
 
   return (
     <div className={styles.reviewPageShell}>
-      <Link href="/elearning/exercises" className={styles.reviewBackLink}>
-        <ChevronLeft size={16} /> Back to quizzes
-      </Link>
+      <ElearningBreadcrumbs items={[
+        { label: "Practice", href: "/elearning/practice?tab=quizzes" },
+        ...(quiz.classSection ? [{ label: quiz.classSection.code, href: `/elearning/classrooms/${quiz.classSection.id}?tab=quizzes` }] : []),
+        { label: quiz.title },
+      ]} />
 
       <section className={styles.reviewHero}>
         <div>
@@ -436,13 +457,13 @@ export default async function QuizAttemptPage({ params, searchParams }: Props) {
             </div>
             <div className={styles.reviewActionRow}>
               {wrongCount > 0 ? (
-                <Link href={`/elearning/wrong-questions?quiz=${quiz.id}`} className="btn-primary">
+                <Link href={`/elearning/practice?tab=wrong&quiz=${quiz.id}`} className="btn-primary">
                   Practice wrong questions again <ArrowRight size={16} />
                 </Link>
               ) : null}
-              <Link href="/elearning/exercises" className="btn-secondary">Back to quizzes</Link>
-              {attemptCount < quiz.attemptLimit && user.role === "STUDENT" ? (
-                <Link href={`/elearning/exercises/${quiz.id}`} className="btn-secondary">
+              {quiz.classSection ? <Link href={`/elearning/classrooms/${quiz.classSection.id}?tab=quizzes`} className="btn-secondary">Back to classroom</Link> : <Link href="/elearning/practice?tab=quizzes" className="btn-secondary">Back to quizzes</Link>}
+              {attemptCount < attemptLimit && user.role === "STUDENT" ? (
+                <Link href={`/elearning/exercises/${quiz.id}${activeDelivery ? `?delivery=${activeDelivery.id}` : ""}`} className="btn-secondary">
                   <RotateCcw size={16} /> Retake quiz
                 </Link>
               ) : null}
@@ -450,6 +471,17 @@ export default async function QuizAttemptPage({ params, searchParams }: Props) {
           </div>
         </section>
       ) : null}
+
+      {reviewAttempt && user.role !== "STUDENT" && pendingCount > 0 ? <section className={styles.dashboardPanel}>
+        <div className={styles.dashboardPanelHeader}><div><span className={styles.cockpitEyebrow}>Teacher review</span><h2>Finalize written answers</h2></div></div>
+        <AiGradeAttemptButton attemptId={reviewAttempt.id} />
+        <form action={gradePracticeAttemptAction} className={styles.workflowFieldGrid}>
+          <input type="hidden" name="attemptId" value={reviewAttempt.id} />
+          <label className={styles.workflowField}><span>Final score / {formatScore(totalPoints)}</span><input name="score" type="number" min="0" max={totalPoints} step="0.5" defaultValue={scoreValue ?? 0} required /></label>
+          <label className={`${styles.workflowField} ${styles.workflowFieldWide}`}><span>Teacher feedback</span><textarea name="feedback" rows={4} placeholder="Review the written response and explain the final score." /></label>
+          <button className="btn-primary" type="submit">Publish final score</button>
+        </form>
+      </section> : null}
 
       {quiz.attempts.length > 0 && (
         <section className={styles.reviewAttemptPanel}>
@@ -518,6 +550,7 @@ export default async function QuizAttemptPage({ params, searchParams }: Props) {
       ) : (
         <form id={`quiz-form-${quiz.id}`} action={submitQuizAttemptAction}>
           <input type="hidden" name="quizId" value={quiz.id} />
+          {activeDelivery ? <input type="hidden" name="quizDeliveryId" value={activeDelivery.id} /> : null}
           <div className={styles.reviewQuestionList}>
             {sectionGroups.map((group) => (
               <section key={group.section.id} className={styles.reviewSection}>

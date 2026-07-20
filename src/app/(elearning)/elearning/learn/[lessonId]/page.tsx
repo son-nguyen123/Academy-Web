@@ -4,8 +4,10 @@ import { notFound } from "next/navigation";
 import styles from "../../elearning.module.css";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { ElearningBreadcrumbs } from "../../ElearningBreadcrumbs";
+import { markLessonProgressAction } from "@/lib/lmsActions";
 
-type Props = { params: Promise<{ lessonId: string }> };
+type Props = { params: Promise<{ lessonId: string }>; searchParams: Promise<{ delivery?: string }> };
 
 export const dynamic = "force-dynamic";
 
@@ -103,24 +105,45 @@ function MediaPreview({ title, url }: { title: string; url: string | null }) {
   );
 }
 
-export default async function LearningPage({ params }: Props) {
+export default async function LearningPage({ params, searchParams }: Props) {
   const user = await requireUser();
   const { lessonId } = await params;
+  const query = await searchParams;
   const lesson = await prisma.lesson.findUnique({
     where: { id: lessonId },
-    include: { course: { include: { lessons: { orderBy: { order: "asc" } }, classes: { include: { enrollments: true } } } } },
+    include: {
+      deliveries: { include: { classSection: { include: { enrollments: true } }, progress: { where: { studentId: user.id } } } },
+      course: {
+        include: {
+          lessons: { orderBy: { order: "asc" }, include: { deliveries: { include: { classSection: { include: { enrollments: true } } } } } },
+          classes: { include: { enrollments: true } },
+        },
+      },
+    },
   });
   if (!lesson) notFound();
 
+  const now = new Date();
+  const activeDelivery = lesson.deliveries.find((delivery) => {
+    if (query.delivery && delivery.id !== query.delivery) return false;
+    if (delivery.status !== "PUBLISHED" || (delivery.availableAt && delivery.availableAt > now)) return false;
+    return user.role !== "STUDENT" || (delivery.classSection.status === "ACTIVE" && delivery.classSection.enrollments.some((item) => item.userId === user.id && item.status === "ACTIVE"));
+  }) || null;
   const hasAccess = user.role === "ADMIN"
     || lesson.course.classes.some((classSection) => classSection.teacherId === user.id)
-    || lesson.course.classes.some((classSection) => classSection.enrollments.some((enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE"));
+    || Boolean(activeDelivery);
   if (!hasAccess) notFound();
 
   const { body, metadata } = splitLessonContent(lesson.content);
+  const visibleLessons = user.role === "STUDENT" ? lesson.course.lessons.filter((item) => item.deliveries.some((delivery) => delivery.status === "PUBLISHED" && delivery.classSection.status === "ACTIVE" && delivery.classSection.enrollments.some((enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE"))) : lesson.course.lessons;
+  const lessonIndex = visibleLessons.findIndex((item) => item.id === lesson.id);
+  const previousLesson = lessonIndex > 0 ? visibleLessons[lessonIndex - 1] : null;
+  const nextLesson = lessonIndex >= 0 ? visibleLessons[lessonIndex + 1] : null;
+  const progress = activeDelivery?.progress[0] || null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <ElearningBreadcrumbs items={[{ label: "Courses", href: "/elearning/courses" }, { label: lesson.course.title, href: `/elearning/courses/${lesson.courseId}` }, { label: lesson.title }]} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
         <Link href={`/elearning/courses/${lesson.courseId}`} style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text-muted)", textDecoration: "none" }}>
           <ChevronLeft size={16} /> Back to Course
@@ -154,21 +177,33 @@ export default async function LearningPage({ params }: Props) {
               </dl>
             </div>
           )}
+          {user.role === "STUDENT" && activeDelivery ? <form action={markLessonProgressAction} className={styles.panel}>
+            <input type="hidden" name="lessonDeliveryId" value={activeDelivery.id} />
+            <input type="hidden" name="status" value="COMPLETED" />
+            <h3>Learning progress</h3>
+            <p>{progress?.status === "COMPLETED" ? "You completed this lesson." : "Mark this lesson complete when you finish the content."}</p>
+            <button className="btn-primary" type="submit"><CheckCircle size={16} /> {progress?.status === "COMPLETED" ? "Completed" : "Mark as completed"}</button>
+          </form> : null}
         </div>
         <div style={{ width: "300px", display: "flex", flexDirection: "column", gap: "1rem" }}>
           <div className={styles.panel} style={{ flex: 1, overflowY: "auto", padding: "1rem" }}>
             <h4 style={{ display: "flex", alignItems: "center", gap: "0.5rem", borderBottom: "1px solid #e2e8f0", paddingBottom: "0.5rem", marginBottom: "1rem" }}><Menu size={16} /> Syllabus</h4>
-            {lesson.course.lessons.map((item) => (
-              <Link key={item.id} href={`/elearning/learn/${item.id}`} style={{ textDecoration: "none" }}>
+            {visibleLessons.map((item) => {
+              const itemDelivery = item.deliveries.find((delivery) => user.role !== "STUDENT" || (delivery.classSection.status === "ACTIVE" && delivery.classSection.enrollments.some((enrollment) => enrollment.userId === user.id && enrollment.status === "ACTIVE")));
+              return <Link key={item.id} href={`/elearning/learn/${item.id}${itemDelivery ? `?delivery=${itemDelivery.id}` : ""}`} style={{ textDecoration: "none" }}>
                 <div style={{ fontSize: "0.875rem", padding: "0.5rem", color: item.id === lesson.id ? "var(--color-orange)" : "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: item.id === lesson.id ? 600 : 400 }}>
                   {item.order < lesson.order ? <CheckCircle size={14} color="#166534" /> : <span style={{ width: 14 }} />}
                   {item.title}
                 </div>
-              </Link>
-            ))}
+              </Link>;
+            })}
           </div>
         </div>
       </div>
+      <nav aria-label="Lesson navigation" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginTop: "1rem" }}>
+        {previousLesson ? <Link href={`/elearning/learn/${previousLesson.id}${previousLesson.deliveries[0] ? `?delivery=${previousLesson.deliveries[0].id}` : ""}`} className="btn-secondary"><ChevronLeft size={16} /> Previous lesson</Link> : <span />}
+        {nextLesson ? <Link href={`/elearning/learn/${nextLesson.id}${nextLesson.deliveries[0] ? `?delivery=${nextLesson.deliveries[0].id}` : ""}`} className="btn-primary">Next lesson</Link> : <Link href={`/elearning/courses/${lesson.courseId}`} className="btn-primary">Finish and return to course</Link>}
+      </nav>
     </div>
   );
 }
