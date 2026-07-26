@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   /* AEC Bright Learning System Colors */
   --color-orange: #f68d2e;
@@ -92,15 +94,32 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-}
+@layer base {
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  section {
+    padding: var(--section-padding) 0;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--color-navy);
+    font-weight: 700;
+  }
+
+  @media(max-width: 768px) {
+    section {
+      padding: 48px 0;
+    }
+  }
 }
 
 /* Layout Utilities */
@@ -108,16 +127,6 @@ a {
   max-width: var(--container);
   margin: 0 auto;
   padding: 0 24px;
-}
-
-section {
-  padding: var(--section-padding) 0;
-}
-
-@media(max-width: 768px) {
-  section {
-    padding: 48px 0;
-  }
 }
 
 /* Buttons */
@@ -183,11 +192,6 @@ section {
   border-radius: var(--radius-lg);
   padding: 32px;
   box-shadow: var(--shadow-card);
-}
-
-/* Typography Helpers */
-h1, h2, h3, h4, h5, h6 {
-  color: var(--color-navy);
 }
 
 .text-orange {

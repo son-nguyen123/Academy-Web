@@ -5,6 +5,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
 import {
+  ChartNoAxesCombined,
   LayoutDashboard,
   FileText,
   Newspaper,
@@ -12,6 +13,10 @@ import {
   Bell,
   GraduationCap,
   Globe2,
+  Presentation,
+  ShieldCheck,
+  School,
+  UserRound,
   Users,
 } from "lucide-react"
 
@@ -28,9 +33,14 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar"
 
-const navItems = [
+const learningNavItems = [
   { name: "Dashboard", path: "/management", icon: LayoutDashboard },
-  { name: "Accounts", path: "/management/accounts", icon: Users },
+  { name: "Teachers", path: "/management/teachers", icon: UserRound },
+  { name: "Classrooms", path: "/management/classrooms", icon: School },
+  { name: "Reports & QA", path: "/management/reports", icon: ChartNoAxesCombined },
+]
+
+const platformNavItems = [
   { name: "Posts", path: "/management/posts", icon: Newspaper },
   { name: "Sponsors", path: "/management/sponsors", icon: FileText },
   { name: "Notifications", path: "/management/notifications", icon: Bell },
@@ -48,17 +58,17 @@ export function AppSidebar() {
           alt="AEC Admin"
           width={160}
           height={45}
-          style={{ objectFit: "contain" }}
+          style={{ objectFit: "contain", width: 160, height: 45 }}
           priority
         />
       </SidebarHeader>
       <SidebarContent className="bg-navy text-white">
         <SidebarGroup>
-          <SidebarGroupLabel className="text-slate-400">Navigation</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-slate-400">Learning operations</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => {
-                const isActive = pathname === item.path
+              {learningNavItems.map((item) => {
+                const isActive = item.path === "/management" ? pathname === item.path : pathname.startsWith(item.path)
                 return (
                   <SidebarMenuItem key={item.name}>
                     <SidebarMenuButton 
@@ -77,12 +87,55 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-slate-400">Website management</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {platformNavItems.map((item) => {
+                const isActive = pathname === item.path || pathname.startsWith(`${item.path}/`)
+                return (
+                  <SidebarMenuItem key={item.name}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      className={isActive ? "bg-orange hover:bg-orange-hover text-white font-medium shadow-sm" : "hover:bg-navy-dark text-slate-300 hover:text-white"}
+                    >
+                      <Link href={item.path}>
+                        <item.icon className="mr-2" />
+                        <span>{item.name}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="bg-navy p-4 text-white">
         <SidebarMenu>
+          {process.env.NODE_ENV !== "production" ? (
+            <>
+              <SidebarMenuItem>
+                <SidebarMenuButton className="bg-indigo-500/20 text-indigo-100 hover:bg-indigo-500/25">
+                  <ShieldCheck className="mr-2" /><span>Admin</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild className="hover:bg-navy-dark text-slate-300 hover:text-white">
+                  <Link href="/api/elearning/demo-role?role=TEACHER"><Presentation className="mr-2" /><span>View Teacher</span></Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild className="hover:bg-navy-dark text-slate-300 hover:text-white">
+                  <Link href="/api/elearning/demo-role?role=STUDENT"><GraduationCap className="mr-2" /><span>View Student</span></Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </>
+          ) : null}
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="hover:bg-navy-dark text-slate-300 hover:text-white">
-              <Link href="/elearning"><GraduationCap className="mr-2" /><span>E-learning</span></Link>
+              <Link href="/management/accounts"><Users className="mr-2" /><span>Accounts</span></Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>

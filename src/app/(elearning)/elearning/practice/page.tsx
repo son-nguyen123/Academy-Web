@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { ClipboardList, FileCheck2, Target } from "lucide-react";
+import { ClipboardList, Target } from "lucide-react";
 import styles from "../elearning.module.css";
-import { ClassQuizzesTab } from "./ClassQuizzesTab";
 import { PracticeTestsTab } from "./PracticeTestsTab";
 import { WrongQuestionsTab } from "./WrongQuestionsTab";
 
@@ -18,20 +17,13 @@ export default async function PracticeHubPage(props: Props) {
   return (
     <div className={styles.practiceHub}>
       {/* Tabs Navigation */}
-      <nav className={styles.practiceTabs} aria-label="Test library sections">
+      <nav className={styles.practiceTabs} aria-label="Quiz library sections">
         <Link 
           href="/elearning/practice?tab=quizzes"
           className={activeTab === "quizzes" ? styles.practiceTabActive : ""}
         >
           <ClipboardList size={18} />
-          Class Quizzes
-        </Link>
-        <Link 
-          href="/elearning/practice?tab=tests"
-          className={activeTab === "tests" ? styles.practiceTabActive : ""}
-        >
-          <FileCheck2 size={18} />
-          Practice Tests
+          Quizzes
         </Link>
         <Link 
           href="/elearning/practice?tab=wrong"
@@ -44,8 +36,7 @@ export default async function PracticeHubPage(props: Props) {
 
       {/* Tab Content */}
       <div className={styles.practiceContent}>
-        {activeTab === "quizzes" && <ClassQuizzesTab searchParams={props.searchParams} />}
-        {activeTab === "tests" && <PracticeTestsTab searchParams={props.searchParams} />}
+        {activeTab === "quizzes" && <PracticeTestsTab searchParams={props.searchParams} />}
         {activeTab === "wrong" && <WrongQuestionsTab searchParams={props.searchParams} />}
       </div>
     </div>

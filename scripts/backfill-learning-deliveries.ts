@@ -5,21 +5,11 @@ loadEnvConfig(process.cwd());
 async function main() {
   const { prisma } = await import("../src/lib/prisma");
   const classrooms = await prisma.classSection.findMany({
-    include: { course: { include: { lessons: true } }, quizzes: true },
+    include: { quizzes: true },
   });
-  let lessonDeliveries = 0;
   let quizDeliveries = 0;
 
   for (const classroom of classrooms) {
-    for (const lesson of classroom.course.lessons) {
-      await prisma.lessonDelivery.upsert({
-        where: { lessonId_classSectionId: { lessonId: lesson.id, classSectionId: classroom.id } },
-        update: {},
-        create: { lessonId: lesson.id, classSectionId: classroom.id, assignedById: classroom.teacherId, status: lesson.published ? "PUBLISHED" : "DRAFT" },
-      });
-      lessonDeliveries += 1;
-    }
-
     for (const quiz of classroom.quizzes) {
       await prisma.quizDelivery.upsert({
         where: { quizId_classSectionId: { quizId: quiz.id, classSectionId: classroom.id } },
@@ -30,7 +20,7 @@ async function main() {
     }
   }
 
-  console.log(JSON.stringify({ classrooms: classrooms.length, lessonDeliveries, quizDeliveries }));
+  console.log(JSON.stringify({ classrooms: classrooms.length, quizDeliveries }));
   await prisma.$disconnect();
 }
 

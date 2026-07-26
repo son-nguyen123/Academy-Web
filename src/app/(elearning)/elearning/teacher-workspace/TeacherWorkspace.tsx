@@ -2,7 +2,9 @@ import { Suspense } from "react";
 import Link from "next/link";
 import {
   ClipboardPlus,
+  ChevronDown,
   LibraryBig,
+  ListChecks,
   Plus,
 } from "lucide-react";
 import styles from "../elearning.module.css";
@@ -26,15 +28,17 @@ export function TeacherWorkspace({ user }: { user: { id: string; name: string | 
             <p>Everything that needs your attention, across every classroom, in one place.</p>
           </div>
           <div className={styles.workspaceHeaderTools}>
-            <Link href="/elearning/assignments/new" className={styles.workspaceSecondaryAction}>
-              <ClipboardPlus size={17} /> Create assignment
+            <Link href="/elearning/tasks" className={styles.workspaceSecondaryAction}>
+              <ListChecks size={17} /> Open tasks
             </Link>
-            <Link href="/elearning/practice?tab=tests" className={styles.workspaceSecondaryAction}>
-              <LibraryBig size={17} /> Assign test
-            </Link>
-            <Link href="/elearning/classrooms/new" className={styles.workspaceHeaderAction}>
-              <Plus size={18} /> Create classroom
-            </Link>
+            <details className={styles.workspaceCreateMenu}>
+              <summary><Plus size={17} /> Create <ChevronDown size={15} /></summary>
+              <div>
+                <Link href="/elearning/assignments/new"><ClipboardPlus size={16} /> Assignment</Link>
+                <Link href="/elearning/practice/new"><LibraryBig size={16} /> Quiz</Link>
+                <Link href="/elearning/classrooms/new"><Plus size={16} /> Classroom</Link>
+              </div>
+            </details>
           </div>
         </header>
 

@@ -1,25 +1,30 @@
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
+import { cookies } from "next/headers";
 import { authOptions } from "@/lib/authOptions";
+import { DEMO_ROLE_COOKIE, ensureDemoElearningData } from "@/lib/demoElearning";
 import { prisma } from "@/lib/prisma";
 
 export type AppRole = "ADMIN" | "TEACHER" | "STUDENT" | "USER";
 
 export async function getCurrentUser() {
+  if (process.env.NODE_ENV !== "production") {
+    const cookieStore = await cookies();
+    const requestedDemoRole = cookieStore.get(DEMO_ROLE_COOKIE)?.value;
+    const session = await getServerSession(authOptions);
+
+    if (requestedDemoRole === "ADMIN" || requestedDemoRole === "TEACHER" || requestedDemoRole === "STUDENT" || !session?.user?.email) {
+      const demoUsers = await ensureDemoElearningData();
+      if (requestedDemoRole === "ADMIN") return demoUsers.admin;
+      return requestedDemoRole === "STUDENT" ? demoUsers.student : demoUsers.teacher;
+    }
+  }
+
   const session = await getServerSession(authOptions);
   const email = session?.user?.email;
 
   if (!email) {
-    // --- MOCK FOR E-LEARNING DEV ---
-    return {
-      id: "mock-student-id",
-      name: "Mock Teacher",
-      email: "teacher@example.com",
-      phone: "123456789",
-      role: "TEACHER" as AppRole,
-      isActive: true,
-    };
-    // --- END MOCK ---
+    return null;
   }
 
   return prisma.user.findUnique({

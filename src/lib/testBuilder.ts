@@ -1,6 +1,6 @@
 export type TestOptionDraft = { text: string; isCorrect?: boolean };
 export type TestQuestionDraft = {
-  type: "MULTIPLE_CHOICE" | "FILL_BLANK" | "ESSAY" | "LISTENING" | "READING";
+  type: "MULTIPLE_CHOICE" | "SHORT_ANSWER" | "FILL_BLANK" | "ESSAY" | "LISTENING" | "READING";
   text: string;
   points?: number;
   options?: TestOptionDraft[];
@@ -23,6 +23,10 @@ export type TestDraft = {
   skill?: string;
   timeLimitMinutes?: number;
   attemptLimit?: number;
+  openAt?: string;
+  closeAt?: string;
+  published?: boolean;
+  shuffleQuestions?: boolean;
   instructions?: string;
   passage?: string;
   sections?: TestSectionDraft[];
@@ -128,7 +132,7 @@ export function normalizeTestDraft(input: unknown): TestDraft {
       ? { text: option.trim() }
       : { text: String((option as Record<string, unknown>)?.text || "").trim(), isCorrect: Boolean((option as Record<string, unknown>)?.isCorrect) })
       .filter((option) => option.text);
-    const allowed = new Set(["MULTIPLE_CHOICE", "FILL_BLANK", "ESSAY", "LISTENING", "READING"]);
+    const allowed = new Set(["MULTIPLE_CHOICE", "SHORT_ANSWER", "FILL_BLANK", "ESSAY", "LISTENING", "READING"]);
     const requestedType = String(item.type || "MULTIPLE_CHOICE").toUpperCase();
     return {
       type: allowed.has(requestedType) ? requestedType as TestQuestionDraft["type"] : "MULTIPLE_CHOICE",
@@ -159,6 +163,10 @@ export function normalizeTestDraft(input: unknown): TestDraft {
     skill: String(source.skill || "MIXED").toUpperCase(),
     timeLimitMinutes: Number(source.timeLimitMinutes) > 0 ? Number(source.timeLimitMinutes) : undefined,
     attemptLimit: Number(source.attemptLimit) > 0 ? Number(source.attemptLimit) : 1,
+    openAt: String(source.openAt || "").trim() || undefined,
+    closeAt: String(source.closeAt || "").trim() || undefined,
+    published: source.published === undefined ? false : Boolean(source.published),
+    shuffleQuestions: Boolean(source.shuffleQuestions),
     instructions: String(source.instructions || "").trim() || undefined,
     passage: String(source.passage || "").trim() || undefined,
     sections: sections.length ? sections : undefined,
@@ -168,14 +176,26 @@ export function normalizeTestDraft(input: unknown): TestDraft {
 
 export function validateTestDraft(draft: TestDraft) {
   const questions = [...(draft.questions || []), ...(draft.sections || []).flatMap((section) => section.questions)];
+  const errors: string[] = [];
   const warnings: string[] = [];
-  if (!draft.title.trim()) warnings.push("Test title is missing.");
-  if (!questions.length) warnings.push("No questions were detected.");
+  if (!draft.title.trim()) errors.push("Add a quiz title.");
+  if (!questions.length) errors.push("Add at least one question.");
   questions.forEach((question, index) => {
-    if (question.type === "MULTIPLE_CHOICE" && (question.options?.length || 0) < 2) warnings.push(`Question ${index + 1} needs at least two options.`);
-    if (question.type === "MULTIPLE_CHOICE" && !question.options?.some((option) => option.isCorrect) && !question.correctIndex) warnings.push(`Question ${index + 1} has no confirmed answer.`);
+    const number = index + 1;
+    if (!question.text.trim()) errors.push(`Question ${number}: add the prompt.`);
+    if (!Number.isFinite(question.points) || Number(question.points) <= 0) errors.push(`Question ${number}: points must be greater than zero.`);
+    if (question.type === "MULTIPLE_CHOICE") {
+      const options = (question.options || []).filter((option) => option.text.trim());
+      if (options.length < 2) errors.push(`Question ${number}: add at least two answer choices.`);
+      if (!options.some((option) => option.isCorrect) && !question.correctIndex) errors.push(`Question ${number}: choose the correct answer.`);
+      if (options.filter((option) => option.isCorrect).length > 1) errors.push(`Question ${number}: choose only one correct answer.`);
+    }
+    if (["SHORT_ANSWER", "FILL_BLANK"].includes(question.type) && !question.answerKey?.trim()) errors.push(`Question ${number}: add an accepted answer.`);
+    if (question.type === "ESSAY" && !question.answerKey?.trim()) warnings.push(`Question ${number}: add a rubric so AI and teachers grade consistently.`);
   });
-  return { questions: questions.length, warnings };
+  if (draft.openAt && draft.closeAt && new Date(draft.closeAt) <= new Date(draft.openAt)) errors.push("The closing time must be after the opening time.");
+  if (!draft.timeLimitMinutes) warnings.push("No time limit is set.");
+  return { questions: questions.length, errors, warnings };
 }
 
 export const testDraftJsonSchema = {
@@ -192,7 +212,7 @@ export const testDraftJsonSchema = {
     questions: { type: "array", items: { $ref: "#/$defs/question" } },
   },
   $defs: { question: { type: "object", additionalProperties: false, required: ["type", "text", "points", "options", "correctIndex", "answerKey", "explanation", "passage"], properties: {
-    type: { type: "string", enum: ["MULTIPLE_CHOICE", "FILL_BLANK", "ESSAY", "LISTENING", "READING"] }, text: { type: "string" }, points: { type: "number" },
+    type: { type: "string", enum: ["MULTIPLE_CHOICE", "SHORT_ANSWER", "FILL_BLANK", "ESSAY", "LISTENING", "READING"] }, text: { type: "string" }, points: { type: "number" },
     options: { type: "array", items: { type: "object", additionalProperties: false, required: ["text", "isCorrect"], properties: { text: { type: "string" }, isCorrect: { type: "boolean" } } } },
     correctIndex: { type: ["number", "null"] }, answerKey: { type: ["string", "null"] }, explanation: { type: ["string", "null"] }, passage: { type: ["string", "null"] },
   } } },

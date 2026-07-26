@@ -12,7 +12,7 @@ export default function AiGradeAttemptButton({ attemptId }: { attemptId: string 
       <input type="hidden" name="attemptId" value={attemptId} />
       <button className="btn-secondary" type="submit" disabled={pending}>
         {pending ? <Loader2 size={16} className={styles.spinner} /> : <Bot size={16} />}
-        {pending ? "AI is grading..." : "Create AI grading draft"}
+        {pending ? "AI is grading..." : "Run AI again"}
       </button>
       {state.message ? <p className={state.ok ? styles.formSuccess : styles.formError} role="status">{state.message}</p> : null}
     </form>

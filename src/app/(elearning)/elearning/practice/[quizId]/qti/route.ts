@@ -9,7 +9,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ qui
   const user = await requireUser(["TEACHER", "ADMIN"]);
   const { quizId } = await params;
   const quiz = await prisma.quiz.findFirst({
-    where: { id: quizId, isPracticeTest: true, ...(user.role === "TEACHER" ? { OR: [{ createdById: user.id }, { collaborators: { some: { userId: user.id } } }] } : {}) },
+    where: { id: quizId, isPracticeTest: true, ...(user.role === "TEACHER" ? { createdById: user.id } : {}) },
     include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: { orderBy: { order: "asc" } } } }, section: true } } },
   });
   if (!quiz) return new Response("Not found", { status: 404 });

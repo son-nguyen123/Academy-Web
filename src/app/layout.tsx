@@ -29,7 +29,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${montserrat.variable} ${inter.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${montserrat.variable} ${inter.variable}`} data-scroll-behavior="smooth" suppressHydrationWarning>
       <body className={montserrat.className} suppressHydrationWarning>
         <SessionProviderWrapper>
           <ThemeProvider>

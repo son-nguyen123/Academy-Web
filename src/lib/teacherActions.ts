@@ -15,12 +15,10 @@ export async function createClassSectionAction(formData: FormData) {
   const startAt = formData.get("startAt") ? new Date(formData.get("startAt") as string) : null;
   const endAt = formData.get("endAt") ? new Date(formData.get("endAt") as string) : null;
 
-  const courseId = String(formData.get("courseId") || "").trim();
   const classroom = await prisma.classSection.create({
-    data: { name, code, status, startAt, endAt, teacherId: user.id, courseId },
+    data: { name, code, status, startAt, endAt, teacherId: user.id },
   });
 
-  revalidatePath("/elearning/courses");
   revalidatePath("/elearning/classrooms");
   revalidatePath("/elearning");
   redirect(`/elearning/classrooms/${classroom.id}?tab=students&created=1`);
@@ -38,24 +36,18 @@ export async function createClassroomWithStateAction(
   const user = await requireUser(["TEACHER", "ADMIN"]);
   const name = String(formData.get("name") || "").trim();
   const requestedCode = String(formData.get("code") || "").trim().toUpperCase();
-  const courseId = String(formData.get("courseId") || "").trim();
   const startAt = String(formData.get("startAt") || "");
   const endAt = String(formData.get("endAt") || "");
   const replaceClassroomId = String(formData.get("replaceClassroomId") || "").trim();
 
-  if (!name || !courseId) {
-    return { ok: false, message: "Class name and course template are required." };
+  if (!name) {
+    return { ok: false, message: "Class name is required." };
   }
   if (requestedCode && !/^[A-Z0-9-]{3,24}$/.test(requestedCode)) {
     return { ok: false, message: "Class code must be 3-24 characters using letters, numbers or hyphens." };
   }
   if (startAt && endAt && new Date(endAt) < new Date(startAt)) {
     return { ok: false, message: "End date must be after the start date." };
-  }
-
-  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { id: true } });
-  if (!course) {
-    return { ok: false, message: "The selected course template no longer exists." };
   }
 
   let code = requestedCode || `AEC-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -72,13 +64,12 @@ export async function createClassroomWithStateAction(
       select: {
         id: true,
         enrollments: { where: { status: "ACTIVE" }, select: { id: true } },
-        lessonDeliveries: { select: { id: true } },
         assignments: { select: { id: true } },
         quizDeliveries: { select: { id: true } },
       },
     });
     const replacementCompleted = replacementCandidate
-      ? 1 + Number(replacementCandidate.enrollments.length > 0) + Number(replacementCandidate.lessonDeliveries.length > 0 || replacementCandidate.assignments.length > 0) + Number(replacementCandidate.quizDeliveries.length > 0)
+      ? 1 + Number(replacementCandidate.enrollments.length > 0) + Number(replacementCandidate.assignments.length > 0) + Number(replacementCandidate.quizDeliveries.length > 0)
       : 4;
     if (!replacementCandidate || replacementCompleted >= 4) return { ok: false, message: "The unfinished classroom no longer exists or cannot be replaced." };
     replacement = { id: replacementCandidate.id };
@@ -86,13 +77,12 @@ export async function createClassroomWithStateAction(
 
   const classroom = await prisma.$transaction(async (tx) => {
     const created = await tx.classSection.create({
-      data: { name, code, status: "ACTIVE", startAt: startAt ? new Date(startAt) : null, endAt: endAt ? new Date(endAt) : null, teacherId: user.id, courseId },
+      data: { name, code, status: "ACTIVE", startAt: startAt ? new Date(startAt) : null, endAt: endAt ? new Date(endAt) : null, teacherId: user.id },
     });
     if (replacement) await tx.classSection.delete({ where: { id: replacement.id } });
     return created;
   });
 
-  revalidatePath("/elearning/courses");
   revalidatePath("/elearning/classrooms");
   revalidatePath("/elearning/classrooms/new");
   revalidatePath("/elearning");
@@ -105,7 +95,7 @@ export async function createCourseTemplateWithStateAction(
   _state: CourseTemplateState,
   formData: FormData,
 ): Promise<CourseTemplateState> {
-  await requireUser(["TEACHER", "ADMIN"]);
+  await requireUser(["ADMIN"]);
   const title = String(formData.get("title") || "").trim();
   if (!title) return { ok: false, message: "Course title is required." };
 
@@ -124,7 +114,7 @@ export async function createCourseTemplateWithStateAction(
 }
 
 export async function updateCourseTemplateAction(courseId: string, formData: FormData) {
-  await requireUser(["TEACHER", "ADMIN"]);
+  await requireUser(["ADMIN"]);
   const title = String(formData.get("title") || "").trim();
   if (!title) return;
   await prisma.course.update({
@@ -168,6 +158,28 @@ export async function updateClassroomNameAction(formData: FormData) {
   redirect(`/elearning/classrooms/${classroomId}?tab=settings&renamed=1`);
 }
 
+export async function addClassMeetingAction(formData: FormData) {
+  const classroomId = String(formData.get("classroomId") || "").trim();
+  const dayOfWeek = Number(formData.get("dayOfWeek"));
+  const startTime = String(formData.get("startTime") || "").trim();
+  const endTime = String(formData.get("endTime") || "").trim();
+  const location = String(formData.get("location") || "").trim() || null;
+  const note = String(formData.get("note") || "").trim() || null;
+  if (!classroomId || !Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6 || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || endTime <= startTime) return;
+  await requireClassroomManager(classroomId);
+  await prisma.classMeeting.create({ data: { classSectionId: classroomId, dayOfWeek, startTime, endTime, location, note } });
+  revalidatePath(`/elearning/classrooms/${classroomId}`);
+}
+
+export async function deleteClassMeetingAction(formData: FormData) {
+  const classroomId = String(formData.get("classroomId") || "").trim();
+  const meetingId = String(formData.get("meetingId") || "").trim();
+  if (!classroomId || !meetingId) return;
+  await requireClassroomManager(classroomId);
+  await prisma.classMeeting.deleteMany({ where: { id: meetingId, classSectionId: classroomId } });
+  revalidatePath(`/elearning/classrooms/${classroomId}`);
+}
+
 export async function removeStudentFromClassAction(formData: FormData) {
   const enrollmentId = String(formData.get("enrollmentId") || "").trim();
   const classroomId = String(formData.get("classroomId") || "").trim();
@@ -185,11 +197,18 @@ export async function removeStudentFromClassAction(formData: FormData) {
     data: { status: "REMOVED", decidedAt: new Date(), decidedById: user.id },
   });
 
+  await prisma.activityLog.create({
+    data: { actorId: user.id, action: "REMOVE_STUDENT_FROM_CLASS", entityType: "Enrollment", entityId: enrollmentId },
+  });
+
   revalidatePath("/elearning");
   revalidatePath("/elearning/classrooms");
   revalidatePath(`/elearning/classrooms/${classroomId}`);
   revalidatePath("/elearning/assignments");
   revalidatePath("/elearning/practice");
+  revalidatePath("/management");
+  revalidatePath("/management/classrooms");
+  revalidatePath(`/management/classrooms/${classroomId}`);
 }
 
 export async function archiveClassroomAction(formData: FormData) {

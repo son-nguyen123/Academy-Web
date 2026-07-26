@@ -4,8 +4,7 @@ import {
   Activity,
   ArrowRight,
   Award,
-  BookOpen,
-  CheckCircle2,
+    CheckCircle2,
   ClipboardList,
   FileCheck2,
   GraduationCap,
@@ -64,7 +63,6 @@ export default async function ElearningDashboard() {
 
   if (isStudent) {
     const [
-      enrollments,
       assignments,
       quizzes,
       practiceTests,
@@ -72,25 +70,6 @@ export default async function ElearningDashboard() {
       grades,
       recentSubmissions,
     ] = await Promise.all([
-      prisma.enrollment.findMany({
-        where: { userId: user.id, status: "ACTIVE", classSection: { status: "ACTIVE" } },
-        include: {
-          classSection: {
-            include: {
-              course: {
-                include: {
-                  lessons: {
-                    where: { published: true, deliveries: { some: { status: "PUBLISHED", classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } } } },
-                    orderBy: { order: "asc" },
-                    take: 3,
-                  },
-                },
-              },
-              teacher: true,
-            },
-          },
-        },
-      }),
       prisma.assignment.findMany({
         where: {
           status: "PUBLISHED",
@@ -98,7 +77,7 @@ export default async function ElearningDashboard() {
         },
         orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
         include: {
-          classSection: { include: { course: true } },
+          classSection: true,
           submissions: {
             where: { studentId: user.id },
             orderBy: { submittedAt: "desc" },
@@ -118,10 +97,14 @@ export default async function ElearningDashboard() {
         orderBy: { createdAt: "desc" },
         include: {
           program: true,
-          classSection: { include: { course: true } },
+          classSection: true,
           questions: true,
+          deliveries: {
+            where: { status: "PUBLISHED", classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } },
+            orderBy: { dueAt: "asc" },
+          },
           attempts: {
-            where: { studentId: user.id },
+            where: { studentId: user.id, isReviewPractice: false },
             orderBy: { startedAt: "desc" },
           },
         },
@@ -134,16 +117,20 @@ export default async function ElearningDashboard() {
         },
         orderBy: { createdAt: "desc" },
         include: {
-          classSection: { include: { course: true } },
+          classSection: true,
           questions: true,
+          deliveries: {
+            where: { status: "PUBLISHED", classSection: { status: "ACTIVE", enrollments: { some: { userId: user.id, status: "ACTIVE" } } } },
+            orderBy: { dueAt: "asc" },
+          },
           attempts: {
-            where: { studentId: user.id },
+            where: { studentId: user.id, isReviewPractice: false },
             orderBy: { startedAt: "desc" },
           },
         },
       }),
       prisma.attempt.findMany({
-        where: { studentId: user.id },
+        where: { studentId: user.id, isReviewPractice: false },
         orderBy: { startedAt: "desc" },
         take: 6,
         include: {
@@ -179,7 +166,13 @@ export default async function ElearningDashboard() {
       }),
     ]);
 
-    const pendingAssignments = assignments.filter((assignment) => assignment.submissions.length === 0);
+    const pendingAssignments = assignments
+      .filter((assignment) => assignment.submissions.length === 0)
+      .sort((a, b) => {
+        const dueA = a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        const dueB = b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        return dueA - dueB || b.createdAt.getTime() - a.createdAt.getTime();
+      });
     const submittedAssignments = assignments.length - pendingAssignments.length;
     const completedQuizzes = quizzes.filter((quiz) => quiz.attempts.some((attempt) => attempt.status !== "IN_PROGRESS")).length;
     const completedPracticeTests = practiceTests.filter((test) => test.attempts.some((attempt) => attempt.status !== "IN_PROGRESS")).length;
@@ -190,12 +183,36 @@ export default async function ElearningDashboard() {
     const finishedLearningItems = submittedAssignments + completedQuizzes + completedPracticeTests;
     const totalLearningItems = assignments.length + availableQuizCount;
     const overallProgress = totalLearningItems ? Math.round((finishedLearningItems / totalLearningItems) * 100) : 0;
-    const averageScore = grades.length ? grades.reduce((sum, grade) => sum + grade.score, 0) / grades.length : null;
+    const averageScore = grades.length ? grades.reduce((sum, grade) => sum + (grade.score ?? 0), 0) / grades.length : null;
 
     const firstInProgressAttempt = recentAttempts.find((attempt) => attempt.status === "IN_PROGRESS");
-    const nextQuiz = quizzes.find((quiz) => quiz.attempts.length === 0);
-    const nextPracticeTest = practiceTests.find((test) => test.attempts.length === 0);
-    const nextLesson = enrollments.flatMap((enrollment) => enrollment.classSection.course.lessons)[0];
+    const pendingItems = [
+      ...pendingAssignments.map((assignment) => ({
+        kind: "assignment" as const,
+        dueAt: assignment.dueAt,
+        href: "/elearning/assignments",
+        title: assignment.title,
+        meta: `${assignment.classSection.code} | ${assignment.dueAt ? `Due ${formatDate(assignment.dueAt)}` : "No deadline"}`,
+        icon: <ListTodo size={22} />,
+      })),
+      ...quizzes.filter((quiz) => quiz.attempts.length === 0).map((quiz) => ({
+        kind: "quiz" as const,
+        dueAt: quiz.deliveries[0]?.dueAt || null,
+        href: `/elearning/exercises/${quiz.id}${quiz.deliveries[0] ? `?delivery=${quiz.deliveries[0].id}` : ""}`,
+        title: quiz.title,
+        meta: `${quiz.program?.code || "General"} | ${quiz.questions.length} questions${quiz.deliveries[0]?.dueAt ? ` | Due ${formatDate(quiz.deliveries[0].dueAt)}` : ""}`,
+        icon: <ClipboardList size={22} />,
+      })),
+      ...practiceTests.filter((test) => test.attempts.length === 0).map((test) => ({
+        kind: "quiz" as const,
+        dueAt: test.deliveries[0]?.dueAt || null,
+        href: `/elearning/exercises/${test.id}${test.deliveries[0] ? `?delivery=${test.deliveries[0].id}` : ""}`,
+        title: test.title,
+        meta: `${test.examType} | ${test.skill}${test.deliveries[0]?.dueAt ? ` | Due ${formatDate(test.deliveries[0].dueAt)}` : ""}`,
+        icon: <FileCheck2 size={22} />,
+      })),
+    ].sort((a, b) => (a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER));
+    const nextPendingItem = pendingItems[0];
     const continueLearning = firstInProgressAttempt
       ? {
           href: firstInProgressAttempt.quiz.isPracticeTest
@@ -207,57 +224,30 @@ export default async function ElearningDashboard() {
           action: "Resume now",
           icon: <PlayCircle size={22} />,
         }
-      : pendingAssignments[0]
+      : nextPendingItem
         ? {
-            href: "/elearning/assignments",
-            eyebrow: "Next assignment",
-            title: pendingAssignments[0].title,
-            meta: `${pendingAssignments[0].classSection.code} | Due ${formatDate(pendingAssignments[0].dueAt)}`,
-            action: "Open assignments",
-            icon: <ListTodo size={22} />,
+            href: nextPendingItem.href,
+            eyebrow: "Next up",
+            title: nextPendingItem.title,
+            meta: `${nextPendingItem.meta}${pendingItems.length > 1 ? ` | +${pendingItems.length - 1} more assignments & quizzes` : ""}`,
+            action: nextPendingItem.kind === "assignment" ? "Open assignment" : "Start quiz",
+            icon: nextPendingItem.icon,
           }
-        : nextQuiz
-          ? {
-              href: `/elearning/exercises/${nextQuiz.id}`,
-              eyebrow: "Next quiz",
-              title: nextQuiz.title,
-              meta: `${nextQuiz.program?.code || "General"} | ${nextQuiz.questions.length} questions`,
-              action: "Start quiz",
-              icon: <ClipboardList size={22} />,
-            }
-          : nextPracticeTest
-            ? {
-                href: `/elearning/exercises/${nextPracticeTest.id}`,
-                eyebrow: "Next practice test",
-                title: nextPracticeTest.title,
-                meta: `${nextPracticeTest.examType} | ${nextPracticeTest.skill} | ${nextPracticeTest.questions.length} questions`,
-                action: "Start test",
-                icon: <FileCheck2 size={22} />,
-              }
-            : nextLesson
-              ? {
-                  href: `/elearning/learn/${nextLesson.id}`,
-                  eyebrow: "Next lesson",
-                  title: nextLesson.title,
-                  meta: "Keep your course momentum going",
-                  action: "Open lesson",
-                  icon: <GraduationCap size={22} />,
-                }
-              : {
-                  href: "/elearning/courses",
+        : {
+                  href: "/elearning/classrooms",
                   eyebrow: "No active task",
-                  title: "Explore your courses",
-                  meta: "Courses, quizzes, and assignments will appear here as teachers publish them.",
-                  action: "Browse courses",
-                  icon: <BookOpen size={22} />,
-                };
+                  title: "Check your classrooms",
+                  meta: "Assignments and quizzes will appear as your teacher publishes them.",
+                  action: "Open classrooms",
+                  icon: <GraduationCap size={22} />,
+          };
 
     const taskCards = [
       ...pendingAssignments.slice(0, 4).map((assignment) => ({
         key: `assignment-${assignment.id}`,
         href: "/elearning/assignments",
         title: assignment.title,
-        meta: `${assignment.classSection.code} | ${assignment.classSection.course.title}`,
+        meta: `${assignment.classSection.code} | ${assignment.classSection.name}`,
         due: assignment.dueAt ? `Due ${formatDateTime(assignment.dueAt)}` : "No deadline",
         badge: "Assignment",
         icon: <ListTodo size={18} />,
@@ -276,7 +266,7 @@ export default async function ElearningDashboard() {
         href: `/elearning/exercises/${test.id}`,
         title: test.title,
         meta: `${test.examType} | ${test.skill}`,
-        due: test.timeLimit ? `${test.timeLimit} min` : "Practice test",
+        due: test.timeLimit ? `${test.timeLimit} min` : "Quiz",
         badge: "Practice",
         icon: <FileCheck2 size={18} />,
       })),
@@ -303,7 +293,7 @@ export default async function ElearningDashboard() {
         key: `grade-${grade.id}`,
         date: grade.createdAt,
         title: "New grade posted",
-        detail: `${grade.assignment?.title || grade.quiz?.title || "Grade"} | ${scoreLabel(grade.score)}`,
+        detail: `${grade.assignment?.title || grade.quiz?.title || "Grade"} | ${scoreLabel(grade.score ?? 0)}`,
         href: "/elearning/scores",
         icon: <Award size={16} />,
       })),
@@ -315,7 +305,7 @@ export default async function ElearningDashboard() {
       {
         href: "/elearning/practice",
         title: "Practice library",
-        detail: `${availableQuizCount} quizzes and tests available`,
+        detail: `${availableQuizCount} quizzes available`,
         icon: <ClipboardList size={20} />,
       },
       {
@@ -324,17 +314,9 @@ export default async function ElearningDashboard() {
         detail: averageScore === null ? "Waiting for first grade" : `${averageScore.toFixed(1)} average`,
         icon: <Trophy size={20} />,
       },
-      {
-        href: "/elearning/courses",
-        title: "Courses",
-        detail: `${enrollments.length} active class${enrollments.length === 1 ? "" : "es"}`,
-        icon: <BookOpen size={20} />,
-      },
     ];
 
     const latestGrade = grades[0];
-    const latestAttempt = recentAttempts[0];
-
     return (
       <div className={styles.dashboardShell}>
         <section className={styles.dashboardHero}>
@@ -361,7 +343,7 @@ export default async function ElearningDashboard() {
           <div>
             <span>Pending</span>
             <strong>{pendingLearningCount}</strong>
-            <p>Assignments, quizzes, tests</p>
+            <p>Assignments and quizzes</p>
           </div>
           <div>
             <span>Average</span>
@@ -379,10 +361,23 @@ export default async function ElearningDashboard() {
               <ArrowRight size={16} />
             </Link>
           ))}
+          <Link href="/elearning/scores" className={`${styles.actionHubItem} ${styles.snapshotHubItem}`}>
+            <span
+              className={styles.snapshotMiniRing}
+              style={{ background: `conic-gradient(#10b981 ${overallProgress * 3.6}deg, #e2e8f0 0deg)` }}
+            >
+              <b>{overallProgress}%</b>
+            </span>
+            <span className={styles.snapshotHubCopy}>
+              <small><Target size={13} /> Snapshot</small>
+              <strong>{latestGrade ? scoreLabel(latestGrade.score ?? 0) : "No grade yet"}</strong>
+              <p>{latestGrade?.assignment?.title || latestGrade?.quiz?.title || "Complete a task to start your progress pulse."}</p>
+            </span>
+            <ArrowRight size={16} />
+          </Link>
         </section>
 
-        <section className={styles.dashboardMain}>
-          <div className={styles.dashboardPanel}>
+        <section className={`${styles.dashboardPanel} ${styles.attentionPanel}`}>
             <div className={styles.dashboardPanelHeader}>
               <div>
                 <span className={styles.cockpitEyebrow}><ListTodo size={16} /> Needs attention</span>
@@ -409,38 +404,6 @@ export default async function ElearningDashboard() {
                 <p>You are caught up. New work will appear here when it is published.</p>
               </div>
             )}
-          </div>
-
-          <aside className={styles.dashboardPanel}>
-            <div className={styles.dashboardPanelHeader}>
-              <div>
-                <span className={styles.cockpitEyebrow}><Target size={16} /> Snapshot</span>
-                <h2>Progress pulse</h2>
-              </div>
-              <Link href="/elearning/scores">Scores</Link>
-            </div>
-            <div className={styles.progressPulse}>
-              <div className={styles.progressRing} style={{ background: `conic-gradient(#10b981 ${overallProgress * 3.6}deg, #e2e8f0 0deg)` }}>
-                <strong>{overallProgress}%</strong>
-              </div>
-              <div>
-                <strong>{latestGrade ? scoreLabel(latestGrade.score) : "No grade"}</strong>
-                <p>{latestGrade?.assignment?.title || latestGrade?.quiz?.title || "Complete a quiz to start your score history."}</p>
-              </div>
-            </div>
-            {latestAttempt ? (
-              <Link
-                href={`/elearning/exercises/${latestAttempt.quizId}?attempt=${latestAttempt.id}`}
-                className={styles.snapshotRow}
-              >
-                <ClipboardList size={18} />
-                <div>
-                  <strong>{latestAttempt.quiz.title}</strong>
-                  <p>{latestAttempt.status === "IN_PROGRESS" ? "In progress" : `Score ${scoreLabel(latestAttempt.score)}`}</p>
-                </div>
-              </Link>
-            ) : null}
-          </aside>
         </section>
 
         <section className={styles.dashboardPanel}>

@@ -1,44 +1,55 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
-import { CheckCircle2, ClipboardCheck, FileSpreadsheet, KeyRound, Loader2, Upload, UserPlus } from "lucide-react";
-import { importStudentsAction, type ImportStudentsState } from "@/lib/lmsActions";
+import { useActionState, useState } from "react";
+import { Check, Copy, Loader2, Mail, UserPlus } from "lucide-react";
+import { addExistingStudentAction, type AddExistingStudentState } from "@/lib/lmsActions";
 import styles from "../../elearning.module.css";
 
-const initialState: ImportStudentsState = { ok: false, message: "", imported: 0, skipped: 0, createdAccounts: [] };
+const initialState: AddExistingStudentState = { ok: false, message: "" };
 
-export function StudentImportForm({ classroomId }: { classroomId: string }) {
-  const [state, formAction, pending] = useActionState(importStudentsAction, initialState);
-  const [students, setStudents] = useState("");
-  const [previewed, setPreviewed] = useState(false);
-  const preview = useMemo(() => {
-    const rows = students.split(/\r?\n/).map((row) => row.trim()).filter(Boolean);
-    const valid = rows.filter((row) => /[^\s@]+@[^\s@]+\.[^\s@]+/.test(row));
-    return { total: rows.length, valid: valid.length, invalid: rows.length - valid.length };
-  }, [students]);
+export function StudentImportForm({ classroomId, classroomCode }: { classroomId: string; classroomCode: string }) {
+  const [state, formAction, pending] = useActionState(addExistingStudentAction, initialState);
+  const [copied, setCopied] = useState(false);
 
-  const readCsv = async (file?: File) => {
-    if (!file) return;
-    setStudents(await file.text());
-    setPreviewed(false);
+  const copyCode = async () => {
+    await navigator.clipboard.writeText(classroomCode);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
   };
 
   return (
-    <form action={formAction} className={styles.importStudentsForm}>
-      <input type="hidden" name="classSectionId" value={classroomId} />
-      <div className={styles.importWizardSteps}><strong>1 <span>Add list</span></strong><i /><span>2 <em>Preview</em></span><i /><span>3 <em>Confirm</em></span></div>
-      <div className={styles.importStudentsGuide}><FileSpreadsheet size={22} /><div><strong>Paste a list or upload CSV</strong><p>One student per line: <code>Full name, email@example.com</code>. Maximum 200 rows.</p></div></div>
-      <label className={styles.workflowField}><span>Students <b>*</b></span><textarea name="students" rows={7} value={students} onChange={(event) => { setStudents(event.target.value); setPreviewed(false); }} placeholder={"Nguyen Van A, student.a@example.com\nTran Thi B, student.b@example.com"} required /></label>
-      <label className={styles.csvUploadButton}><Upload size={16} /> Upload CSV<input type="file" accept=".csv,text/csv" onChange={(event) => void readCsv(event.target.files?.[0])} /></label>
+    <div className={styles.rosterEntryGrid}>
+      <form action={formAction} className={styles.rosterEntryCard}>
+        <span className={styles.rosterEntryIcon}><Mail size={19} /></span>
+        <div>
+          <strong>Add an existing student</strong>
+          <p>Use the exact email on an active Student account. The learner is added immediately.</p>
+        </div>
+        <input type="hidden" name="classSectionId" value={classroomId} />
+        <label className={styles.workflowField}>
+          <span>Student email</span>
+          <input name="email" type="email" placeholder="student@example.com" autoComplete="off" required />
+        </label>
+        <button className="btn-primary" type="submit" disabled={pending}>
+          {pending ? <Loader2 size={16} className={styles.spinner} /> : <UserPlus size={16} />}
+          {pending ? "Adding..." : "Add student"}
+        </button>
+        {state.message ? <div className={state.ok ? styles.formSuccess : styles.formError} role="status">{state.message}</div> : null}
+      </form>
 
-      {previewed ? <div className={styles.importPreview}><div><strong>{preview.total}</strong><span>Total rows</span></div><div><strong>{preview.valid}</strong><span>Valid emails</span></div><div className={preview.invalid ? styles.importWarning : ""}><strong>{preview.invalid}</strong><span>Need correction</span></div></div> : null}
-
-      <div className={styles.importStudentsFooter}>
-        <small>New accounts receive a unique temporary password shown once after import. Existing accounts keep their current password.</small>
-        {!previewed ? <button className="btn-secondary" type="button" disabled={!preview.total} onClick={() => setPreviewed(true)}><ClipboardCheck size={16} /> Preview students</button> : <button className="btn-primary" type="submit" disabled={pending || preview.valid === 0}>{pending ? <Loader2 size={16} className={styles.spinner} /> : <UserPlus size={16} />}{pending ? "Adding students..." : `Confirm ${preview.valid} students`}</button>}
-      </div>
-      {state.message ? <div className={state.ok ? styles.formSuccess : styles.formError} role="status"><CheckCircle2 size={17} /> {state.message}</div> : null}
-      {state.createdAccounts.length ? <section className={styles.temporaryCredentials}><header><KeyRound size={18} /><div><strong>Temporary login details</strong><p>Copy these now and share each password privately with the correct student.</p></div></header>{state.createdAccounts.map((account) => <div key={account.email}><span>{account.email}</span><code>{account.password}</code></div>)}</section> : null}
-    </form>
+      <section className={styles.rosterEntryCard}>
+        <span className={styles.rosterEntryIcon}><UserPlus size={19} /></span>
+        <div>
+          <strong>Let the student request access</strong>
+          <p>Share this code. The student signs in, enters it under Classes, then waits for your approval.</p>
+        </div>
+        <div className={styles.classCodeBox}>
+          <span>Class code</span>
+          <code>{classroomCode}</code>
+          <button type="button" onClick={() => void copyCode()}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "Copied" : "Copy"}</button>
+        </div>
+        <small>Having the code does not grant access until you approve the request.</small>
+      </section>
+    </div>
   );
 }

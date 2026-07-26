@@ -60,9 +60,9 @@ export async function TeacherOverviewStats({ userId, isAdmin }: { userId: string
         select: { userId: true },
       }),
       prisma.submission.count({ where: { status: "SUBMITTED", assignment: assignmentWhere } }),
-      prisma.attempt.count({ where: { status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] }, quiz: quizWhere } }),
+      prisma.attempt.count({ where: { isReviewPractice: false, status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] }, quiz: quizWhere } }),
       prisma.submission.count({ where: { submittedAt: { gte: today }, assignment: assignmentWhere } }),
-      prisma.attempt.count({ where: { submittedAt: { gte: today }, quiz: quizWhere } }),
+      prisma.attempt.count({ where: { isReviewPractice: false, submittedAt: { gte: today }, quiz: quizWhere } }),
     ]);
 
     const stats = [
@@ -100,6 +100,7 @@ export async function NeedsAttentionWidget({ userId, isAdmin }: { userId: string
       prisma.attempt.count({
         where: {
           status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+          isReviewPractice: false,
           quiz: teacherQuizWhere(userId, isAdmin),
           answers: { some: { question: { type: "ESSAY" } } },
         },
@@ -117,6 +118,7 @@ export async function NeedsAttentionWidget({ userId, isAdmin }: { userId: string
       prisma.attempt.count({
         where: {
           status: "SUBMITTED",
+          isReviewPractice: false,
           quiz: { isPracticeTest: false, ...teacherQuizWhere(userId, isAdmin) },
         },
       }),
@@ -126,7 +128,7 @@ export async function NeedsAttentionWidget({ userId, isAdmin }: { userId: string
       { label: "Pending enrollments", count: pendingEnrollments, href: "/elearning/classrooms", icon: UserPlus, tone: "amber" },
       { label: "Essays waiting for review", count: essays, href: "/elearning/scores", icon: FileText, tone: "violet" },
       { label: "AI grading confirmations", count: aiConfirmations, href: "/elearning/scores", icon: Bot, tone: "cyan" },
-      { label: "Draft assignments", count: drafts, href: "/elearning/courses", icon: FileClock, tone: "slate" },
+      { label: "Draft assignments", count: drafts, href: "/elearning/assignments", icon: FileClock, tone: "slate" },
       { label: "Quiz submissions to grade", count: quizSubmissions, href: "/elearning/scores", icon: ListChecks, tone: "orange" },
     ].filter((item) => item.count > 0);
 
@@ -164,7 +166,6 @@ export async function ClassroomsWidget({ userId, isAdmin }: { userId: string; is
       orderBy: { updatedAt: "desc" },
       take: 4,
       include: {
-        course: true,
         enrollments: { select: { status: true, requestedAt: true } },
         assignments: {
           orderBy: { updatedAt: "desc" },
@@ -172,7 +173,7 @@ export async function ClassroomsWidget({ userId, isAdmin }: { userId: string; is
           include: { submissions: { select: { status: true, submittedAt: true } } },
         },
         quizDeliveries: {
-          include: { attempts: { select: { status: true, submittedAt: true } } },
+          include: { attempts: { where: { isReviewPractice: false }, select: { status: true, submittedAt: true } } },
         },
       },
     });
@@ -199,7 +200,7 @@ export async function ClassroomsWidget({ userId, isAdmin }: { userId: string; is
                   <div className={styles.workspaceClassMain}>
                     <small>{classroom.code}</small>
                     <strong>{classroom.name}</strong>
-                    <p>{classroom.course.title}</p>
+                    <p>Classroom workspace</p>
                   </div>
                   <div className={styles.workspaceClassMetric}>
                     <strong>{students}</strong><span>Students</span>
@@ -229,11 +230,20 @@ export async function ClassroomsWidget({ userId, isAdmin }: { userId: string; is
 
 export async function RecentActivityWidget({ userId, isAdmin }: { userId: string; isAdmin: boolean }) {
   try {
-    const [submissions, enrollments, grades, publications] = await Promise.all([
+    const [submissions, quizAttempts, enrollments, grades, publications] = await Promise.all([
       prisma.submission.findMany({
         where: { assignment: teacherAssignmentWhere(userId, isAdmin) },
         orderBy: { submittedAt: "desc" }, take: 5,
         include: { student: true, assignment: { include: { classSection: true } } },
+      }),
+      prisma.attempt.findMany({
+        where: {
+          status: { in: ["SUBMITTED", "AUTO_SUBMITTED", "GRADED"] },
+          isReviewPractice: false,
+          quizDelivery: { classSection: teacherClassWhere(userId, isAdmin) },
+        },
+        orderBy: { submittedAt: "desc" }, take: 5,
+        include: { student: true, quiz: true, quizDelivery: { include: { classSection: true } } },
       }),
       prisma.enrollment.findMany({
         where: { classSection: teacherClassWhere(userId, isAdmin) },
@@ -254,8 +264,9 @@ export async function RecentActivityWidget({ userId, isAdmin }: { userId: string
 
     const events = [
       ...submissions.map((item) => ({ key: `submission-${item.id}`, date: item.submittedAt, title: `${item.student.name || item.student.email || "A student"} submitted work`, detail: `${item.assignment.title} · ${item.assignment.classSection.code}`, href: "/elearning/scores", icon: FileText })),
+      ...quizAttempts.map((item) => ({ key: `attempt-${item.id}`, date: item.submittedAt || item.startedAt, title: `${item.student.name || item.student.email || "A student"} completed a quiz`, detail: `${item.quiz.title} · ${item.quizDelivery?.classSection.code || "Open quiz"}${typeof item.score === "number" ? ` · ${item.score}` : ""}`, href: `/elearning/exercises/${item.quizId}?attempt=${item.id}${item.quizDeliveryId ? `&delivery=${item.quizDeliveryId}` : ""}`, icon: ListChecks })),
       ...enrollments.map((item) => ({ key: `enrollment-${item.id}`, date: item.requestedAt, title: item.status === "REQUESTED" ? "New enrollment request" : "Enrollment updated", detail: `${item.student.name || item.student.email || "Student"} · ${item.classSection.code}`, href: `/elearning/classrooms/${item.classSection.id}?tab=students`, icon: UserPlus })),
-      ...grades.map((item) => ({ key: `grade-${item.id}`, date: item.createdAt, title: "Score published", detail: `${item.assignment?.title || item.quiz?.title || "Manual score"} · ${item.score.toFixed(1)}`, href: "/elearning/scores", icon: ClipboardCheck })),
+      ...grades.map((item) => ({ key: `grade-${item.id}`, date: item.createdAt, title: "Score published", detail: `${item.assignment?.title || item.quiz?.title || "Manual score"} · ${(item.score ?? 0).toFixed(1)}`, href: "/elearning/scores", icon: ClipboardCheck })),
       ...publications.map((item) => ({ key: `publish-${item.id}`, date: item.updatedAt, title: "Assignment published", detail: `${item.title} · ${item.classSection.code}`, href: `/elearning/classrooms/${item.classSection.id}?tab=assignments`, icon: Sparkles })),
     ].sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 6);
 
@@ -300,7 +311,7 @@ export async function LearningInsightsWidget({ userId, isAdmin }: { userId: stri
 
     const recent = grades.slice(0, Math.min(10, grades.length));
     const previous = grades.slice(10, 20);
-    const percentScore = (grade: (typeof recent)[number]) => grade.assignment ? (grade.score / grade.assignment.maxScore) * 100 : grade.score;
+    const percentScore = (grade: (typeof recent)[number]) => grade.assignment ? ((grade.score ?? 0) / grade.assignment.maxScore) * 100 : (grade.score ?? 0);
     const average = recent.reduce((sum, grade) => sum + percentScore(grade), 0) / recent.length;
     const previousAverage = previous.length ? previous.reduce((sum, grade) => sum + percentScore(grade), 0) / previous.length : null;
     const trend = previousAverage === null ? null : average - previousAverage;

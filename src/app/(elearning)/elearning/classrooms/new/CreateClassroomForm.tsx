@@ -2,16 +2,15 @@
 
 import { useActionState, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, BookOpen, CalendarDays, CheckCircle2, Loader2, Plus, RotateCcw, School, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarDays, CheckCircle2, Loader2, RotateCcw, School, Trash2, X } from "lucide-react";
 import { createClassroomWithStateAction, type CreateClassroomState } from "@/lib/teacherActions";
 import styles from "../../elearning.module.css";
 
 const initialState: CreateClassroomState = { ok: false, message: "" };
 
-type CourseOption = { id: string; title: string; program: string | null; published: boolean; _count: { lessons: number; classes: number } };
 type UnfinishedClassroom = { id: string; name: string; code: string; completed: number; total: number };
 
-export function CreateClassroomForm({ courses, defaultCourseId = "", unfinishedClassroom }: { courses: CourseOption[]; defaultCourseId?: string; unfinishedClassroom?: UnfinishedClassroom | null }) {
+export function CreateClassroomForm({ unfinishedClassroom }: { unfinishedClassroom?: UnfinishedClassroom | null }) {
   const [state, formAction, pending] = useActionState(createClassroomWithStateAction, initialState);
   const [showGuard, setShowGuard] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -38,7 +37,7 @@ export function CreateClassroomForm({ courses, defaultCourseId = "", unfinishedC
       <section className={styles.workflowCard}>
         <div className={styles.workflowCardHeading}>
           <span><School size={18} /></span>
-          <div><p>Step 1</p><h2>Classroom identity</h2><small>This is what teachers and students will see.</small></div>
+          <div><p>Section 1</p><h2>Classroom identity</h2><small>This is what teachers and students will see.</small></div>
         </div>
         <div className={styles.workflowFieldGrid}>
           <label className={styles.workflowField}>
@@ -55,19 +54,8 @@ export function CreateClassroomForm({ courses, defaultCourseId = "", unfinishedC
 
       <section className={styles.workflowCard}>
         <div className={styles.workflowCardHeading}>
-          <span><BookOpen size={18} /></span>
-          <div><p>Step 2</p><h2>Select a course template</h2><small>The template supplies lessons and curriculum; this classroom owns students, assignments and scores.</small></div>
-        </div>
-        {courses.length ? <div className={styles.workflowFieldGrid}>
-          <label className={`${styles.workflowField} ${styles.workflowFieldWide}`}><span>Course template <b>*</b></span><select name="courseId" required defaultValue={courses.some((course) => course.id === defaultCourseId) ? defaultCourseId : ""}><option value="" disabled>Select a reusable course template</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.title}{course.program ? ` · ${course.program}` : ""} · {course._count.lessons} lessons</option>)}</select></label>
-          <div className={styles.courseSelectionNote}><BookOpen size={18} /><div><strong>One template, many classrooms</strong><p>Choosing a course does not copy or duplicate it. Curriculum updates remain shared across its classrooms.</p></div></div>
-        </div> : <div className={styles.workflowEmpty}><p>No course templates exist yet. Create the curriculum template before opening a classroom.</p><Link href="/elearning/courses/new" className="btn-primary"><Plus size={16} /> Create course template</Link></div>}
-      </section>
-
-      <section className={styles.workflowCard}>
-        <div className={styles.workflowCardHeading}>
           <span><CalendarDays size={18} /></span>
-          <div><p>Step 3</p><h2>Schedule</h2><small>Dates are optional and can be changed later.</small></div>
+          <div><p>Section 2</p><h2>Schedule</h2><small>Dates are optional and can be changed later.</small></div>
         </div>
         <div className={styles.workflowFieldGrid}>
           <label className={styles.workflowField}><span>Start date</span><input name="startAt" type="date" /></label>
@@ -80,7 +68,7 @@ export function CreateClassroomForm({ courses, defaultCourseId = "", unfinishedC
 
       <div className={styles.workflowFooter}>
         <div><strong>Next step: add students</strong><span>You will be taken directly to the classroom roster.</span></div>
-        <button className="btn-primary" type="submit" disabled={pending || courses.length === 0}>
+        <button className="btn-primary" type="submit" disabled={pending}>
           {pending ? <Loader2 size={17} className={styles.spinner} /> : <School size={17} />}
           {pending ? "Creating classroom..." : "Create classroom"}
         </button>

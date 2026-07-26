@@ -104,13 +104,15 @@ async function parseWithHostedAi(raw: string, suggestAnswers = false) {
   return normalizeTestDraft(JSON.parse(text));
 }
 
-async function parseWithLocalAi(raw: string) {
+async function parseWithLocalAi(raw: string, suggestAnswers = false) {
   const endpoint = (process.env.LOCAL_AI_BASE_URL || "http://127.0.0.1:11434/v1").replace(/\/$/, "");
   const response = await fetch(`${endpoint}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(process.env.LOCAL_AI_API_KEY ? { Authorization: `Bearer ${process.env.LOCAL_AI_API_KEY}` } : {}) },
     body: JSON.stringify({ model: process.env.LOCAL_AI_MODEL || "gpt-oss:20b", temperature: 0, response_format: { type: "json_object" }, messages: [
-      { role: "system", content: "Convert English tests to JSON with title, examType, skill, sections and questions. Preserve wording and never invent an answer." },
+      { role: "system", content: suggestAnswers
+        ? "Review this English quiz JSON. Preserve every question and every supplied answer. Fill only missing answer keys when evidence is clear, add concise explanations, and create assessment rubrics for essay questions. Return the complete JSON. A teacher must verify it."
+        : "Convert English quiz material to JSON with title, examType, skill, sections and questions. Preserve wording and never invent an answer." },
       { role: "user", content: raw.slice(0, 120000) },
     ] }),
   });
@@ -139,33 +141,52 @@ export async function prepareTestDraftAction(_previous: TestBuilderState, formDa
     else if (mode === "json" || mode === "manual" || (file instanceof File && /\.json$/i.test(file.name))) draft = normalizeTestDraft(JSON.parse(raw));
     else if (mode === "qti" || (file instanceof File && /\.xml$|\.qti$/i.test(file.name))) draft = parseQti(raw);
     else if (mode === "ai") draft = String(formData.get("provider") || "hosted") === "local" ? await parseWithLocalAi(raw) : await parseWithHostedAi(raw);
-    else if (mode === "suggest") draft = await parseWithHostedAi(raw, true);
+    else if (mode === "suggest") draft = process.env.TEST_BUILDER_AI_PROVIDER === "hosted"
+      ? await parseWithHostedAi(raw, true)
+      : await parseWithLocalAi(raw, true);
     else draft = parseFormattedTestText(raw, file instanceof File ? file.name.replace(/\.[^.]+$/, "") : "Untitled test");
 
     const validation = validateTestDraft(draft);
-    return { status: "ready", message: `Prepared ${validation.questions} questions. Review everything before saving.`, draft, warnings: validation.warnings, questionCount: validation.questions, source: file instanceof File && file.size ? file.name : mode };
+    return { status: "ready", message: `Prepared ${validation.questions} ${validation.questions === 1 ? "question" : "questions"}. Review everything before saving.`, draft, warnings: validation.warnings, questionCount: validation.questions, source: file instanceof File && file.size ? file.name : mode };
   } catch (error) {
-    return { status: "error", message: error instanceof Error ? error.message : "Could not prepare this test." };
+    return { status: "error", message: error instanceof Error ? error.message : "Could not prepare this quiz." };
   }
 }
 
 export async function savePreparedTestAction(formData: FormData) {
-  await requireTeacherOrAdmin();
+  const actor = await requireTeacherOrAdmin();
   const draftJson = String(formData.get("json") || "");
   const draft = normalizeTestDraft(JSON.parse(draftJson));
   const validation = validateTestDraft(draft);
-  if (!validation.questions) throw new Error("Add at least one question before saving.");
+  if (validation.errors.length) throw new Error(validation.errors[0]);
   const importData = new FormData();
   importData.set("json", JSON.stringify(draft));
   const classroomId = String(formData.get("classSectionId") || "");
   if (classroomId) importData.set("classSectionId", classroomId);
   const result = await importPracticeTestJsonAction(importData);
-  if (!result?.testId) throw new Error(result?.message || "The test could not be saved.");
-  redirect(`/elearning/practice?tab=tests&created=1`);
+  if (!result?.testId) throw new Error(result?.message || "The quiz could not be saved.");
+  if (classroomId && draft.published) {
+    const classroom = await prisma.classSection.findFirst({ where: { id: classroomId, status: "ACTIVE", ...(actor.role === "TEACHER" ? { teacherId: actor.id } : {}) }, select: { id: true } });
+    if (!classroom) throw new Error("The selected classroom is unavailable.");
+    const parseDate = (name: string) => {
+      const raw = String(formData.get(name) || "");
+      const value = raw ? new Date(raw) : null;
+      return value && !Number.isNaN(value.getTime()) ? value : null;
+    };
+    await prisma.quizDelivery.upsert({
+      where: { quizId_classSectionId: { quizId: result.testId, classSectionId: classroomId } },
+      update: { status: "PUBLISHED", openAt: parseDate("openAt"), dueAt: parseDate("dueAt"), attemptLimit: Math.max(1, Number(formData.get("attemptLimit")) || draft.attemptLimit || 1), assignedById: actor.id },
+      create: { quizId: result.testId, classSectionId: classroomId, status: "PUBLISHED", openAt: parseDate("openAt"), dueAt: parseDate("dueAt"), attemptLimit: Math.max(1, Number(formData.get("attemptLimit")) || draft.attemptLimit || 1), assignedById: actor.id },
+    });
+    revalidatePath(`/elearning/classrooms/${classroomId}`);
+    revalidatePath("/elearning");
+    redirect(`/elearning/classrooms/${classroomId}?tab=quizzes&created=1`);
+  }
+  redirect(`/elearning/practice?tab=quizzes&created=1`);
 }
 
 async function manageableTest(quizId: string, actor: { id: string; role: string }) {
-  return prisma.quiz.findFirst({ where: { id: quizId, isPracticeTest: true, ...(actor.role === "TEACHER" ? { OR: [{ createdById: actor.id }, { collaborators: { some: { userId: actor.id } } }] } : {}) }, include: { sections: { orderBy: { order: "asc" }, include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: { orderBy: { order: "asc" } } } } } } } }, questions: { where: { sectionId: null }, orderBy: { order: "asc" }, include: { question: { include: { options: { orderBy: { order: "asc" } } } } } } } });
+  return prisma.quiz.findFirst({ where: { id: quizId, isPracticeTest: true, ...(actor.role === "TEACHER" ? { createdById: actor.id } : {}) }, include: { sections: { orderBy: { order: "asc" }, include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: { orderBy: { order: "asc" } } } } } } } }, questions: { where: { sectionId: null }, orderBy: { order: "asc" }, include: { question: { include: { options: { orderBy: { order: "asc" } } } } } } } });
 }
 
 function snapshotFromTest(test: NonNullable<Awaited<ReturnType<typeof manageableTest>>>) {
@@ -183,28 +204,6 @@ export async function createTestVersionAction(formData: FormData) {
   if (!test) return;
   const last = await prisma.testVersion.aggregate({ where: { quizId }, _max: { version: true } });
   await prisma.testVersion.create({ data: { quizId, createdById: actor.id, version: (last._max.version || 0) + 1, changeNote: String(formData.get("changeNote") || "Manual snapshot").trim() || "Manual snapshot", snapshot: JSON.parse(JSON.stringify(snapshotFromTest(test))) } });
-  revalidatePath(`/elearning/practice/${quizId}/manage`);
-}
-
-export async function addTestCollaboratorAction(formData: FormData) {
-  const actor = await requireTeacherOrAdmin();
-  const quizId = String(formData.get("quizId") || "");
-  const email = String(formData.get("email") || "").trim().toLowerCase();
-  const test = await prisma.quiz.findFirst({ where: { id: quizId, isPracticeTest: true, ...(actor.role === "TEACHER" ? { createdById: actor.id } : {}) }, select: { id: true } });
-  if (!test || !email) return;
-  const teacher = await prisma.user.findFirst({ where: { email, role: { in: ["TEACHER", "ADMIN"] }, isActive: true }, select: { id: true } });
-  if (!teacher || teacher.id === actor.id) return;
-  await prisma.testCollaborator.upsert({ where: { quizId_userId: { quizId, userId: teacher.id } }, update: { role: "EDITOR" }, create: { quizId, userId: teacher.id, role: "EDITOR" } });
-  revalidatePath(`/elearning/practice/${quizId}/manage`);
-}
-
-export async function removeTestCollaboratorAction(formData: FormData) {
-  const actor = await requireTeacherOrAdmin();
-  const quizId = String(formData.get("quizId") || "");
-  const collaboratorId = String(formData.get("collaboratorId") || "");
-  const test = await prisma.quiz.findFirst({ where: { id: quizId, ...(actor.role === "TEACHER" ? { createdById: actor.id } : {}) }, select: { id: true } });
-  if (!test) return;
-  await prisma.testCollaborator.deleteMany({ where: { id: collaboratorId, quizId } });
   revalidatePath(`/elearning/practice/${quizId}/manage`);
 }
 

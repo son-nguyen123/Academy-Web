@@ -15,9 +15,8 @@ export default async function CreateTestPage() {
     prisma.question.findMany({ where: user.role === "TEACHER" ? { createdById: user.id } : {}, include: { options: { orderBy: { order: "asc" } } }, orderBy: { updatedAt: "desc" }, take: 100 }),
   ]);
   return <main className={styles.workflowPage}>
-    <ElearningBreadcrumbs items={[{ label: "Test Library", href: "/elearning/practice?tab=tests" }, { label: "Create test" }]} />
-    <header className={styles.workflowHero}><div><span><Route size={16} /> Assessment workflow</span><h1>Create an English test</h1><p>Write from scratch, reuse your question bank, import a document or start from an exam template.</p></div><Link href="/elearning/practice?tab=tests" className="btn-secondary"><ArrowLeft size={16} /> Back to library</Link></header>
-    <div className={styles.workflowSteps}><strong>1 <span>Build or import</span></strong><i /><span>2 <em>Review questions</em></span><i /><span>3 <em>Save and assign</em></span></div>
+    <ElearningBreadcrumbs items={[{ label: "Quizzes", href: "/elearning/practice?tab=quizzes" }, { label: "Create quiz" }]} />
+    <header className={styles.workflowHero}><div><span><Route size={16} /> Assessment workflow</span><h1>Create an English quiz</h1><p>Write from scratch, reuse your question bank, import a document or start from an exam template.</p></div><Link href="/elearning/practice?tab=quizzes" className="btn-secondary"><ArrowLeft size={16} /> Back to library</Link></header>
     <TestBuilder classrooms={classrooms} questionBank={questions.map((item) => ({ id: item.id, text: item.text, type: item.type, points: item.points, answerKey: item.answerKey, explanation: item.explanation, options: item.options.map((option) => ({ text: option.text, isCorrect: option.isCorrect })) }))} />
   </main>;
 }

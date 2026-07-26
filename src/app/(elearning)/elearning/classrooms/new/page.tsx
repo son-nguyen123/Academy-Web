@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft, Route } from "lucide-react";
 import { requireUser } from "@/lib/session";
-import { prisma } from "@/lib/prisma";
 import { ElearningBreadcrumbs } from "../../ElearningBreadcrumbs";
 import { CreateClassroomForm } from "./CreateClassroomForm";
 import { getTeacherSetupProgress } from "@/lib/teacherSetup";
@@ -13,12 +12,8 @@ type Props = { searchParams: Promise<Record<string, string | string[] | undefine
 
 export default async function CreateClassroomPage({ searchParams }: Props) {
   const user = await requireUser(["TEACHER", "ADMIN"]);
-  const query = await searchParams;
-  const selectedCourseId = typeof query.courseId === "string" ? query.courseId : "";
-  const [courses, setup] = await Promise.all([prisma.course.findMany({
-    orderBy: [{ published: "desc" }, { title: "asc" }],
-    select: { id: true, title: true, program: true, published: true, _count: { select: { lessons: true, classes: true } } },
-  }), getTeacherSetupProgress(user.id, false)]);
+  await searchParams;
+  const setup = await getTeacherSetupProgress(user.id, false);
 
   return (
     <main className={styles.workflowPage}>
@@ -31,10 +26,7 @@ export default async function CreateClassroomPage({ searchParams }: Props) {
         </div>
         <Link href="/elearning/classrooms" className="btn-secondary"><ArrowLeft size={16} /> Back to classrooms</Link>
       </header>
-      <div className={styles.workflowSteps} aria-label="Classroom workflow">
-        <strong>1 <span>Create classroom</span></strong><i /><span>2 <em>Add students</em></span><i /><span>3 <em>Create assignment</em></span>
-      </div>
-      <CreateClassroomForm courses={courses} defaultCourseId={selectedCourseId} unfinishedClassroom={setup.classroomId && setup.completed < setup.total ? { id: setup.classroomId, name: setup.classroomName || "Untitled classroom", code: setup.classroomCode || "", completed: setup.completed, total: setup.total } : null} />
+      <CreateClassroomForm unfinishedClassroom={setup.classroomId && setup.completed < setup.total ? { id: setup.classroomId, name: setup.classroomName || "Untitled classroom", code: setup.classroomCode || "", completed: setup.completed, total: setup.total } : null} />
     </main>
   );
 }

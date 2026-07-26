@@ -5,9 +5,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Award,
-  BookOpen,
   ClipboardList,
   ClipboardCheck,
+  ListChecks,
   GraduationCap,
   Globe2,
   LayoutDashboard,
@@ -24,21 +24,20 @@ type SidebarUser = {
 };
 
 const studentNavItems = [
-  { name: "Dashboard", path: "/elearning", icon: LayoutDashboard },
-  { name: "My Classrooms", path: "/elearning/classrooms", icon: Users },
-  { name: "Course Content", path: "/elearning/courses", icon: BookOpen },
-  { name: "My Work", path: "/elearning/assignments", icon: GraduationCap },
-  { name: "Practice & Tests", path: "/elearning/practice", icon: ClipboardList },
-  { name: "Results & Feedback", path: "/elearning/scores", icon: Award },
+  { name: "Home", path: "/elearning", icon: LayoutDashboard },
+  { name: "Classes", path: "/elearning/classrooms", icon: Users },
+  { name: "Assignments", path: "/elearning/assignments", icon: GraduationCap },
+  { name: "Quizzes", path: "/elearning/practice", icon: ClipboardList },
+  { name: "Results", path: "/elearning/scores", icon: Award },
 ];
 
 const teacherNavItems = [
-  { name: "Workspace", path: "/elearning", icon: LayoutDashboard },
-  { name: "My Classrooms", path: "/elearning/classrooms", icon: Users },
-  { name: "Course Library", path: "/elearning/courses", icon: BookOpen },
+  { name: "Home", path: "/elearning", icon: LayoutDashboard },
+  { name: "Classes", path: "/elearning/classrooms", icon: Users },
   { name: "Assignments", path: "/elearning/assignments", icon: GraduationCap },
-  { name: "Test Library", path: "/elearning/practice", icon: ClipboardList },
-  { name: "Review & Scores", path: "/elearning/scores", icon: ClipboardCheck },
+  { name: "Quizzes", path: "/elearning/practice", icon: ClipboardList },
+  { name: "Results", path: "/elearning/scores", icon: ClipboardCheck },
+  { name: "Tasks", path: "/elearning/tasks", icon: ListChecks },
 ];
 
 function isActivePath(pathname: string, path: string) {
@@ -67,7 +66,7 @@ export function ElearningSidebar({ user }: { user: SidebarUser }) {
           alt="AEC Logo"
           width={72}
           height={72}
-          style={{ objectFit: "contain", objectPosition: "center" }}
+          style={{ objectFit: "contain", objectPosition: "center", width: 72, height: 72 }}
         />
         <h2>AEC E-Learning</h2>
       </div>
@@ -101,18 +100,15 @@ export function ElearningSidebar({ user }: { user: SidebarUser }) {
             </Link>
           );
         })}
-        {user.role === "ADMIN" && (
-          <Link
-            href="/management"
-            className={`${styles.navLink} ${pathname.startsWith("/management") ? styles.navLinkActive : ""}`}
-          >
-            <Settings size={20} />
-            Management
-          </Link>
-        )}
       </nav>
 
       <div className={styles.sidebarFooter}>
+        {process.env.NODE_ENV !== "production" && user.role !== "ADMIN" ? (
+          <Link className={styles.navLink} href="/api/elearning/demo-role?role=ADMIN">
+            <Settings size={20} />
+            Admin
+          </Link>
+        ) : null}
         <Link className={styles.navLink} href="/">
           <Globe2 size={20} />
           Public website
